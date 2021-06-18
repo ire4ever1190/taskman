@@ -12,31 +12,31 @@ type
         tasks: seq[Task]
         futures: seq[Future[void]] # Store the futures so there are still things registered
 
-func newScheduler(): Scheduler =
+func newScheduler*(): Scheduler =
     Scheduler(
         tasks: newSeq[Task]()
     )
 
-proc newTask(handler: ScheduleProc, interval: TimeInterval): Task =
+proc newTask*(handler: ScheduleProc, interval: TimeInterval): Task =
     Task(
         handler: handler,
         interval: interval,
         startTime: getTime()
     )
 
-proc idle*(self: Scheduler) {.async.} =
+proc idle(self: Scheduler) {.async.} =
   ## Idle the scheduler. It prevents the scheduler from shutdown when no beats is running.
   while true:
     await sleepAsync(1000)
 
-proc every(scheduler: Scheduler, interval: TimeInterval, task: proc () {.async.}) =
+proc every*(scheduler: Scheduler, interval: TimeInterval, task: proc () {.async.}) =
     scheduler.tasks &= newTask(task, interval)
 
 proc millisecondsLeft(task: Task): int =
     ## Returns time different in seconds between now and the tasks start time
     result = int (task.startTime - getTime()).inMilliseconds
 
-proc run(task: Task) {.async.} =
+proc run*(task: Task) {.async.} =
     ## Starts the task in the background
     while true:
         if getTime() >= task.startTime:
@@ -48,7 +48,7 @@ proc run(task: Task) {.async.} =
                 echo getCurrentException().msg
         await sleepAsync task.milliSecondsLeft
 
-proc start(scheduler: Scheduler) {.async.} =
+proc start*(scheduler: Scheduler) {.async.} =
     ## Runs all the tasks in the background
     for task in scheduler.tasks:
         let future = task.run()
