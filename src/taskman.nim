@@ -1,5 +1,6 @@
 import asyncdispatch
 import times
+import std/heapqueue
 
 type
     ScheduleProc = proc (): Future[void] {.async}
@@ -9,12 +10,13 @@ type
         startTime: Time
 
     Scheduler = ref object
-        tasks: seq[Task]
-        futures: seq[Future[void]] # Store the futures so there are still things registered
+        tasks: HeapQueue[Task]
+
+proc `<`(a, b: Task): bool = a.startTime < b.startTime
 
 func newScheduler*(): Scheduler =
     Scheduler(
-        tasks: newSeq[Task]()
+        tasks: initHeapQueue[Task]()
     )
 
 proc newTask*(handler: ScheduleProc, interval: TimeInterval): Task =
@@ -24,42 +26,46 @@ proc newTask*(handler: ScheduleProc, interval: TimeInterval): Task =
         startTime: getTime()
     )
 
-proc idle(self: Scheduler) {.async.} =
-  ## Idle the scheduler. It prevents the scheduler from shutdown when no beats is running.
-  while true:
-    await sleepAsync(1000)
-
 proc every*(scheduler: Scheduler, interval: TimeInterval, task: proc () {.async.}) =
-    scheduler.tasks &= newTask(task, interval)
+    scheduler.tasks.push newTask(task, interval)
 
-proc millisecondsLeft(task: Task): int =
+proc milliSecondsLeft(task: Task): int =
     ## Returns time different in seconds between now and the tasks start time
     result = int (task.startTime - getTime()).inMilliseconds
 
-proc run*(task: Task) {.async.} =
-    ## Starts the task in the background
-    while true:
-        if getTime() >= task.startTime:
-            task.startTime = getTime() + task.interval
+proc start*(scheduler: Scheduler) {.async.} =
+    ## Starts running the tasks.
+    ## Call with `asyncCheck` to make it run in the background
+    while true:        
+        let currTask = scheduler.tasks.pop()
+        if getTime() >= currTask.startTime:
+            currTask.startTime = getTime() + currTask.interval # Schedule task again
             try:
-                await task.handler()
+                await currTask.handler()
             except:
                 echo "Error with task"
                 echo getCurrentException().msg
-        await sleepAsync task.milliSecondsLeft
-
-proc start*(scheduler: Scheduler) {.async.} =
-    ## Runs all the tasks in the background
-    for task in scheduler.tasks:
-        let future = task.run()
-        scheduler.futures.add future
-        asyncCheck future
+        scheduler.tasks.push currTask
+        await sleepAsync scheduler.tasks[0].milliSecondsLeft
 
 when isMainModule:
     let tasks = newScheduler()
+    template sinceLast(): Duration =
+        block:
+            var lastTime {.global.}: Time
+            once:
+                lastTime = getTime()
+            let currTime = getTime()
+            let sinceLast = currTime - lastTime
+            lastTime = currTime
+            sinceLast
+            
     tasks.every(2.seconds) do () {.async.}:
-        echo "tock"
+        echo "tock, ", sinceLast()
+        
+    tasks.every(3.seconds) do () {.async.}:
+        echo "tick, ", sinceLast()
+        
     waitFor tasks.start()
-    runForever()
 
 export times
