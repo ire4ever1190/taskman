@@ -36,7 +36,7 @@ proc milliSecondsLeft(task: Task): int =
 proc start*(scheduler: Scheduler) {.async.} =
     ## Starts running the tasks.
     ## Call with `asyncCheck` to make it run in the background
-    while true:        
+    while scheduler.tasks.len > 0:        
         let currTask = scheduler.tasks.pop()
         if getTime() >= currTask.startTime:
             currTask.startTime = getTime() + currTask.interval # Schedule task again
