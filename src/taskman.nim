@@ -3,69 +3,163 @@ import times
 import std/heapqueue
 
 type
-    ScheduleProc = proc (): Future[void] {.async}
-    Task = ref object
-        handler: ScheduleProc
-        interval: TimeInterval
+    Task = object
+        handler: TaskHandler
         startTime: Time
+        case oneShot: bool # Whether the task runs repeatedly or only once
+        of false:
+          interval: TimeInterval
+        of true: discard
+
+    TaskHandler = proc (): Future[void] {.async.}
 
     Scheduler = ref object
         tasks: HeapQueue[Task]
 
-proc `<`(a, b: Task): bool = a.startTime < b.startTime
+    RemoveTaskException = CatchableError
+
+using scheduler: Scheduler
+
+proc `<`(a, b: Task): bool {.inline.} = a.startTime < b.startTime
+
+proc `==`(a, b: Task): bool {.inline.} =
+  a.handler == b.handler
 
 func newScheduler*(): Scheduler =
     Scheduler(
         tasks: initHeapQueue[Task]()
     )
 
-proc newTask*(handler: ScheduleProc, interval: TimeInterval): Task =
+proc newTask*(handler: TaskHandler, interval: TimeInterval): Task =
+    ## Creates a new task which can be added to a scheduler.
+    ## This task will run every `interval`
     Task(
         handler: handler,
         interval: interval,
-        startTime: getTime()
+        startTime: getTime(),
+        oneShot: false
     )
 
-proc every*(scheduler: Scheduler, interval: TimeInterval, task: proc () {.async.}) =
-    scheduler.tasks.push newTask(task, interval)
+proc newTask*(handler: TaskHandler, time: DateTime): Task =
+    ## Creates a new task which can be added to a scheduler.
+    ## This task will only run once
+    Task(
+      handler: handler,
+      startTime: time.toTime(),
+      oneshot: true
+    )
+
+proc add*(scheduler; task: Task) {.inline.} =
+    ## Adds a task to the scheduler.
+    scheduler.tasks.push task
+
+proc every*(scheduler; interval: TimeInterval, task: TaskHandler) =
+    ## Runs a task every time the interval happens.
+    runnableExamples:
+        let tasks = newScheduler()
+
+        tasks.every(5.seconds) do () {.async.}:
+            echo "5 seconds has passed, see you again in 5 seconds"
+
+        tasks.every(2.hours) do () {.async.}:
+            echo "2 hours has passed, see you again in 2 hours"
+
+    scheduler &= newTask(task, interval)
+
+proc at*(scheduler; time: DateTime, task: TaskHandler) =
+    ## Runs a task at a certain time (only runs once).
+    runnableExamples:
+        let tasks = newScheduler()
+
+        tasks.at("2077-03-06".parse("yyyy-MM-dd")) do () {.async.}:
+            echo "The date is now 2077-03-06"
+
+    scheduler &= newTask(task, time)
+
+proc wait*(scheduler; interval: TimeInterval, task: TaskHandler) =
+    ## Waits `interval` amount of time and then runs task (only runs once).
+    runnableExamples:
+        import std/httpclient
+        let tasks = newScheduler()
+        let client = newAsyncHttpClient()
+        # I need to send message reminder in a few minutes
+        tasks.wait(5.minutes) do () {.async.}:
+            asyncCheck client.post("http://notificationurl.com", "Your reminder message")
+
+    scheduler.at(now() + interval, task)
 
 proc milliSecondsLeft(task: Task): int =
     ## Returns time different in seconds between now and the tasks start time
-    result = int (task.startTime - getTime()).inMilliseconds
+    result = int((task.startTime - getTime()).inMilliseconds)
 
-proc start*(scheduler: Scheduler) {.async.} =
+proc del*(scheduler; task: Task) =
+    ## Removes a task from the scheduler
+    let index = scheduler.tasks.find task
+    scheduler.tasks.del index
+
+proc removeTask*() =
+    ## Is used in a running task to make it not be called again.
+    ## (Two tasks are considered equal if they have the same handler proc even if the times are different so this might cause issues)
+    runnableExamples:
+        let tasks = newScheduler()
+        var i = 0
+        tasks.every(5.seconds) do () {.async.}:
+            if i == 5:
+                # Stop the task after the fifth time it has ran and never run it again
+                removeTask()
+            else:
+                # Do important stuff
+                inc i
+    raise newException(RemoveTaskException, "")
+
+template onlyRun*(times: int) =
+  ## Make task only run a certain number of times
+  var timesRan {.global.} = 0
+  defer:
+    if timesRan == times:
+        removeTask()
+    else:
+        inc timesRan
+
+proc start*(scheduler) {.async.} =
     ## Starts running the tasks.
     ## Call with `asyncCheck` to make it run in the background
     while scheduler.tasks.len > 0:        
-        let currTask = scheduler.tasks.pop()
+        await sleepAsync scheduler.tasks[0].milliSecondsLeft
+        var currTask = scheduler.tasks.pop()
         if getTime() >= currTask.startTime:
-            currTask.startTime = getTime() + currTask.interval # Schedule task again
+            if not currTask.oneShot:
+                # Schedule task again
+                currTask.startTime = getTime() + currTask.interval
+                scheduler &= currTask
+
             try:
                 await currTask.handler()
+            except RemoveTaskException:
+                scheduler.del currTask
             except:
                 echo "Error with task"
                 echo getCurrentException().msg
-        scheduler.tasks.push currTask
-        await sleepAsync scheduler.tasks[0].milliSecondsLeft
+        else:
+          # Add task back so it can be waited on again
+          scheduler &= currTask
+
 
 when isMainModule:
     let tasks = newScheduler()
-    template sinceLast(): Duration =
-        block:
-            var lastTime {.global.}: Time
-            once:
-                lastTime = getTime()
-            let currTime = getTime()
-            let sinceLast = currTime - lastTime
-            lastTime = currTime
-            sinceLast
+
             
-    tasks.every(2.seconds) do () {.async.}:
-        echo "tock, ", sinceLast()
-        
-    tasks.every(3.seconds) do () {.async.}:
-        echo "tick, ", sinceLast()
-        
+    # tasks.every(2.seconds) do () {.async.}:
+    #     echo "tock, ", sinceLast()
+    #
+    # tasks.every(3.seconds) do () {.async.}:
+    #     echo "tick, ", sinceLast()
+    let now = now()
+    tasks.wait(5.seconds) do () {.async.}:
+        echo "Hello"
+        echo (now() - now).inSeconds
+
     waitFor tasks.start()
 
 export times
+export asyncdispatch

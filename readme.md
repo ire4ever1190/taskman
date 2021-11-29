@@ -12,5 +12,4 @@ let tasks = newScheduler()
 tasks.every(2.seconds) do () {.async.}:
     echo "tock"
 waitFor tasks.start()
-runForever()
 ```
