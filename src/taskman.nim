@@ -30,7 +30,11 @@ func newScheduler*(): Scheduler =
         tasks: initHeapQueue[Task]()
     )
 
-proc newTask*(handler: TaskHandler, interval: TimeInterval): Task =
+func len*(scheduler): int {.inline.} = 
+  ## Returns number of tasks in the scheduler
+  scheduler.tasks.len
+
+proc newTask*(interval: TimeInterval, handler: TaskHandler): Task =
     ## Creates a new task which can be added to a scheduler.
     ## This task will run every `interval`
     Task(
@@ -40,7 +44,7 @@ proc newTask*(handler: TaskHandler, interval: TimeInterval): Task =
         oneShot: false
     )
 
-proc newTask*(handler: TaskHandler, time: DateTime): Task =
+proc newTask*(time: DateTime, handler: TaskHandler): Task =
     ## Creates a new task which can be added to a scheduler.
     ## This task will only run once
     Task(
@@ -64,7 +68,7 @@ proc every*(scheduler; interval: TimeInterval, task: TaskHandler) =
         tasks.every(2.hours) do () {.async.}:
             echo "2 hours has passed, see you again in 2 hours"
 
-    scheduler &= newTask(task, interval)
+    scheduler &= newTask(interval, task)
 
 proc at*(scheduler; time: DateTime, task: TaskHandler) =
     ## Runs a task at a certain time (only runs once).
@@ -74,7 +78,7 @@ proc at*(scheduler; time: DateTime, task: TaskHandler) =
         tasks.at("2077-03-06".parse("yyyy-MM-dd")) do () {.async.}:
             echo "The date is now 2077-03-06"
 
-    scheduler &= newTask(task, time)
+    scheduler &= newTask(time, task)
 
 proc wait*(scheduler; interval: TimeInterval, task: TaskHandler) =
     ## Waits `interval` amount of time and then runs task (only runs once).
@@ -89,11 +93,20 @@ proc wait*(scheduler; interval: TimeInterval, task: TaskHandler) =
     scheduler.at(now() + interval, task)
 
 proc milliSecondsLeft(task: Task): int =
-    ## Returns time different in seconds between now and the tasks start time
+    ## Returns time different in milliseconds between now and the tasks start time
     result = int((task.startTime - getTime()).inMilliseconds)
 
 proc del*(scheduler; task: Task) =
     ## Removes a task from the scheduler
+    runnableExamples:
+      # Create task that echos "hello" every 5 seconds 
+      let tasks = newScheduler()
+      let task = newTask(5.seconds) do () {.async.}:
+        echo "hello"
+      tasks &= task
+      # Run scheduler in background, do other stuff
+      tasks.del task
+      doAssert tasks.len == 0
     let index = scheduler.tasks.find task
     scheduler.tasks.del index
 
@@ -114,6 +127,10 @@ proc removeTask*() =
 
 template onlyRun*(times: int) =
   ## Make task only run a certain number of times
+  runnablesExamples:
+    let tasks = newScheduler()
+    tasks.every(5.seconds) do {.async.}:
+      onlyRun(5) # This is like the example in removeTask
   var timesRan {.global.} = 0
   defer:
     if timesRan == times:
@@ -124,7 +141,7 @@ template onlyRun*(times: int) =
 proc start*(scheduler) {.async.} =
     ## Starts running the tasks.
     ## Call with `asyncCheck` to make it run in the background
-    while scheduler.tasks.len > 0:        
+    while scheduler.len > 0:        
         await sleepAsync scheduler.tasks[0].milliSecondsLeft
         var currTask = scheduler.tasks.pop()
         if getTime() >= currTask.startTime:
