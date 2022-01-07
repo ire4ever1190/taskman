@@ -14,15 +14,14 @@ template sinceLast(): Duration =
     lastTime = currTime
     sinceLast
 
-template checkTakes(seconds: int, range = -50..50): untyped =
+template checkTakes(seconds: int, range = -10..10): untyped =
   ## Checks that the code following this only takes a certain number of seconds
   ## range: The range in milliseconds that the duration can differ by
   let start = now()
   defer:
     tasks.start()
     let diff = (now() - start).inMilliseconds - (seconds * 1000)
-    echo diff
-    check diff in range
+    check diff in range #
 
 let tasks = newScheduler()
 
@@ -40,3 +39,12 @@ test "Run at certain time":
 test "Run in a certain amount of time":
   checkTakes 5
   tasks.wait(5.seconds) do (): discard
+
+test "Error handler can reschedule":
+  let tasks = newScheduler() do (tasks: Scheduler, task: Task, exception: ref Exception):
+    # Echo exception and then reschedule the task to run in 5 seconds
+    task.startTime = getTime() + 1.seconds
+  checkTakes 3
+  tasks.every(5.minutes) do ():
+    onlyRun(3)
+    raise (ref Exception)(msg: "Working")
