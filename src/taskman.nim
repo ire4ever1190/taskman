@@ -129,15 +129,12 @@ const
     ## Use with cron task to run every day in the week
   
 
-func low[T](s: set[T]): T =
+func min[T](s: set[T]): int =
   ## Returns smallest element that is in set[T]
-  var i = T.low.int
-  while i <= T.high.int:
-    if T(i) in s:
-      return T(i)
-    inc i
+  for i in s:
+    return i.ord
 
-func high[T](s: set[T]): T =
+func max[T](s: set[T]): T =
   ## Returns largest element that is in set[T]
   var i = T.high.int
   while i >= T.low.int:
@@ -155,49 +152,31 @@ func `/`*[T: CronRanges](a: set[T], inc: int): set[T] =
     # Only use every third hour in our range
     assert {5.HourRange .. 15.HourRange} / 4 == {5.HourRange, 9.HourRange, 13.HourRange}
 
-  var curr = a.low
-  # Highest value that is currently in the set, don't go past it
-  let max = a.high
+  var curr = a.min
+    # Highest value that is currently in the set, don't go past it
+  let max = a.max.ord
 
   while curr <= max:
-    if curr in a:
-      result.incl curr
+    if T(curr) in a:
+      result.incl T(curr)
     let next = curr.int + inc
     # Check if the next value is valid in the full range
     if next >= T.low.int and next <= T.high.int:
-      curr = T(curr.int + inc)
+      curr = curr.int + inc
     else:
       break
 
-func nextVal[T](s: set[T], curr: T): (T, bool) =
-  ## Returns values that comes after T (wraps around if needed)
-  ## If it wraps around then it returns true
-  let low = s.low
-  var lastVal = low
-  var i = s.high.int
-  while i >= low.int:
-    let val = T(i)
-    if val in s:
-      if val <= curr:
-        return (lastVal, lastVal == low)
-      else:
-        lastVal = val
-    dec i
 
-func incField[T: CronRanges](s: set[T], curr: T): T =
+func incField[T: CronRanges](s: set[T], curr: T): int =
   ## Returns the value needed to increment a field to the next value.
   ## If the value wraps around then it returns a large enough value to cause that wrap around
-  let low = s.low
-  var lastVal = low
-  var i = s.high.int
-  while i >= low.int:
-    let val = T(i)
-    if val in s:
-      if val <= curr:
-        return abs(lastVal - curr)
-      else:
-        lastVal = val - curr
-    dec i
+  for item in s:
+    if item >= curr:
+      return item.ord - curr.ord
+  return (T.high.int - curr.ord) + s.min
+  
+func monthDays(d: DateTime): set[MonthDayRange] =
+  {1.MonthDayRange .. d.month.getDaysInMonth(d.year)}
 
 func initCron*(minutes = everyMinute, hours = everyHour, monthDays = everyMonthDay, months = everyMonth, weekDays = everyWeekDay): Cron =
   ## Makes a new cron timer
@@ -278,15 +257,34 @@ func matches(date: DateTime, format: Cron): bool =
 
 var doPrint* = false
 
+func possibleDays(allowedDays: set[WeekDay], date: DateTime): set[MonthDayRange] =
+  for monthDay in date.monthDays:
+    let day = monthDay.getDayOfWeek(date.month, date.year)
+    if day in allowedDays:
+      result.incl monthDay
+
+# From https://github.com/soasme/nim-schedules/blob/master/src/schedules/cron/cron.nim#L201
+proc ceil(dt: DateTime): DateTime =
+  result = dt
+  if dt.nanosecond > 0:
+    result -= initTimeInterval(nanoseconds=dt.nanosecond)
+    result += initTimeInterval(seconds=1)
+  if dt.second > 0:
+    result += initTimeInterval(seconds=(60 - dt.second))
+
+const maxYears {.intdefine.} = 3 # Max years to search ahead to find cron time
 proc next*(now: DateTime, format: Cron): DateTime =
   ## Returns next date that a cron would run from now
   var doNext: bool
 
-  result = now
-  while not result.matches(format):
-    if doPrint:
-      echo result.format("yyyy-MM-dd hh:mm:ss")
+  result = now.ceil()
+  let startYear = now.year
+  # TODO: Throw exception on infinite loop?
+  while not result.matches(format) and now.year - startYear <= maxYears:
     result += format.minutes.incField(result.minute).minutes
+    result += format.hours.incField(result.hour).hours
+    result += (format.weekDays.possibleDays(result) * format.monthDays).incField(result.monthDay).days
+    result += format.months.incField(result.month).months
   
 func `<`(a, b: TaskBase[HandlerTypes]): bool {.inline.} = a.startTime < b.startTime
 func `==`(a, b: TaskBase[HandlerTypes]): bool {.inline.} = a.handler == b.handler
@@ -481,3 +479,6 @@ proc start*(scheduler: AsyncScheduler | Scheduler) {.multisync.} =
 
   
 export times
+when isMainModule:
+  let s = {1.MonthDayRange, 10, 12}
+  echo s.incField(13)
