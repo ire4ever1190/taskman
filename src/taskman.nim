@@ -1,8 +1,18 @@
-import asyncdispatch
+
+# Check which async to use
+const asyncBackend {.strdefine.} = ""
+when asyncBackend == "chronos":
+  import chronos
+  export chronos
+else:
+  import std/asyncdispatch
+  export asyncdispatch
+  
 import std/[
   times,
   heapqueue,
   os,
+  macros
 ]
 
 when compileOption("threads"):
@@ -13,57 +23,273 @@ else:
 ##
 ## This package can be used for simple tasks that need to run on an interval or at a certain time.
 ##
+## It has both an async and non-async api (They are similar, only difference being in creation of scheduler)
+##
+## Making tasks
+## ============
+##
+## The main procs for creating tasks are 
+##
+## * every_ When you want a task to run on an interval
+## * at_ When you want the task to run once at a certain date (Runs once)
+## * wait_ When you want to wait a certain amount of time and then run the task (Runs once)
+##
+
+runnableExamples "-r:off":
+  let tasks = newScheduler() # or newAsyncScheduler if your tasks are async
+
+  tasks.every(5.minutes) do ():
+    echo "This will run every 5 minutes"
+
+  tasks.at("2077-01-1".parse("yyyy-mm-dd")) do ():
+    echo "This will run on the 1st of janurary in 2077"
+
+  tasks.wait(10.hours) do ():
+    echo "This will run after 10 hours"
+
+  # Block the thread and run tasks when needed
+  # Async scheduler can run in background with asyncCheck if you want to run other stuff (e.g. website)
+  tasks.start()
+
 
 type
-    TaskBase*[T: HandlerTypes] = ref object
-      ## * **handler**: The proc that handles the task being called
-      ## * **startTime**: The time that the task should be called
-      ## * **name**: The name of the task, useful for debugging with error messages (default is defaultTaskName_)
-      ## * **oneShot**: Whether the task only runs once (true) or runs continuiously (false)
-      handler*: T
-      startTime*: Time
-      name*: string
-      case oneShot*: bool # Whether the task runs repeatedly or only once
-      of false:
-        interval*: TimeInterval
-      of true: discard
+  # CronPartType = enum
+
+  CronRanges = MinuteRange or HourRange or MonthDayRange or Month or WeekDay
+  
+  TaskType = enum
+    Interval
+    OneShot
+    CronTask
+
+  Cron* = object
+    ## The five star (*) values of a cronjob
+    minutes*: set[MinuteRange]
+    hours*: set[HourRange]
+    monthDays*: set[MonthDayRange]
+    months*: set[Month]
+    weekDays*: set[WeekDay]
+    
+  TaskBase*[T: HandlerTypes] = ref object
+    ## * **handler**: The proc that handles the task being called
+    ## * **startTime**: The time that the task should be called
+    ## * **name**: The name of the task, useful for debugging with error messages (default is defaultTaskName_)
+    ## * **oneShot**: Whether the task only runs once (true) or runs continuiously (false)
+    handler*: T
+    startTime*: Time
+    name*: string
+    case oneShot*: bool # Whether the task runs repeatedly or only once
+    of false:
+      interval*: TimeInterval
+    of true: discard
         
-    AsyncTaskHandler* = proc (): Future[void] {.threadsafe.}
-      ## Proc that runs in an async scheduler
-      ##
-      ## .. Note::When using `--threads:on` the proc must be gcsafe
+  AsyncTaskHandler* = proc (): Future[void] {.threadsafe.}
+    ## Proc that runs in an async scheduler
+    ##
+    ## .. Note::When using `--threads:on` the proc must be gcsafe
 
-    TaskHandler* = proc () {.threadsafe.}
-      ## Proc that runs in a normal scheduler
-      ##
-      ## .. Note::When using `--threads:on` the proc must be gcsafe
+  TaskHandler* = proc () {.threadsafe.}
+    ## Proc that runs in a normal scheduler
+    ##
+    ## .. Note::When using `--threads:on` the proc must be gcsafe
 
 
-    ErrorHandler*[T] = proc (s: SchedulerBase[T], task: TaskBase[T], exception: ref Exception) {.threadsafe.}
-      ## The error handler will be called when a task raises an exception.
-      ## Can be used to do things like reschedule a proc to be called earlier or to just ignore errors
+  ErrorHandler*[T] = proc (s: SchedulerBase[T], task: TaskBase[T], exception: ref Exception) {.threadsafe.}
+    ## The error handler will be called when a task raises an exception.
+    ## Can be used to do things like reschedule a proc to be called earlier or to just ignore errors
 
-    HandlerTypes* = AsyncTaskHandler | TaskHandler
+  HandlerTypes* = AsyncTaskHandler | TaskHandler
 
-    SchedulerBase*[T: HandlerTypes] = ref object
-      tasks*: HeapQueue[TaskBase[T]]
-      errorHandler*: ErrorHandler[T]
+  SchedulerBase*[T: HandlerTypes] = ref object
+    tasks*: HeapQueue[TaskBase[T]]
+    errorHandler*: ErrorHandler[T]
 
-    Scheduler* = SchedulerBase[TaskHandler]
-    AsyncScheduler* = SchedulerBase[AsyncTaskHandler]
+  Scheduler* = SchedulerBase[TaskHandler]
+  AsyncScheduler* = SchedulerBase[AsyncTaskHandler]
 
-    Task* = TaskBase[TaskHandler]
-    AsyncTask* = TaskBase[AsyncTaskHandler]
+  Task* = TaskBase[TaskHandler]
+  AsyncTask* = TaskBase[AsyncTaskHandler]
 
-    RemoveTaskException* = CatchableError
+  RemoveTaskException* = CatchableError
+    ## Throw this within a task to remove it from the scheduler
 
-const defaultTaskName* {.strdefine.} = "task"
-  ## Default name for a task
 
-proc `<`[T: HandlerTypes](a, b: TaskBase[T]): bool {.inline.} = a.startTime < b.startTime
+const 
+  defaultTaskName* {.strdefine.} = "task"
+    ## Default name for a task. Will be shown in error messages
+  everyMinute* = {0.MinuteRange .. 59}
+    ## Use with cron task to run every minute
+  everyHour* = {0.HourRange .. 23}
+    ## Use with cron task to run every hour
+  everyMonthDay* = {1.MonthDayRange .. 31}
+    ## use with cron task to run every day in the month
+  everyMonth* = {mJan .. mDec}
+    ## Use with cron task to run every month
+  everyWeekDay* = {dMon .. dSun}
+    ## Use with cron task to run every day in the week
+  
 
-proc `==`[T: HandlerTypes](a, b: TaskBase[T]): bool {.inline.} =
-  a.handler == b.handler
+func low[T](s: set[T]): T =
+  ## Returns smallest element that is in set[T]
+  var i = T.low.int
+  while i <= T.high.int:
+    if T(i) in s:
+      return T(i)
+    inc i
+
+func high[T](s: set[T]): T =
+  ## Returns largest element that is in set[T]
+  var i = T.high.int
+  while i >= T.low.int:
+    if T(i) in s:
+      return T(i)
+    dec i
+
+
+
+func `/`*[T: CronRanges](a: set[T], inc: int): set[T] =
+  ## Returns a range of values that count up by inc
+  runnableExamples:
+    # Set of values to run every second day
+    assert EveryWeekDay / 2 == {dMon, dWed, dFri, dSun} 
+    # Only use every third hour in our range
+    assert {5.HourRange .. 15.HourRange} / 4 == {5.HourRange, 9.HourRange, 13.HourRange}
+
+  var curr = a.low
+  # Highest value that is currently in the set, don't go past it
+  let max = a.high
+
+  while curr <= max:
+    if curr in a:
+      result.incl curr
+    let next = curr.int + inc
+    # Check if the next value is valid in the full range
+    if next >= T.low.int and next <= T.high.int:
+      curr = T(curr.int + inc)
+    else:
+      break
+
+func nextVal[T](s: set[T], curr: T): (T, bool) =
+  ## Returns values that comes after T (wraps around if needed)
+  ## If it wraps around then it returns true
+  let low = s.low
+  var lastVal = low
+  var i = s.high.int
+  while i >= low.int:
+    let val = T(i)
+    if val in s:
+      if val <= curr:
+        return (lastVal, lastVal == low)
+      else:
+        lastVal = val
+    dec i
+
+func incField[T: CronRanges](s: set[T], curr: T): T =
+  ## Returns the value needed to increment a field to the next value.
+  ## If the value wraps around then it returns a large enough value to cause that wrap around
+  let low = s.low
+  var lastVal = low
+  var i = s.high.int
+  while i >= low.int:
+    let val = T(i)
+    if val in s:
+      if val <= curr:
+        return abs(lastVal - curr)
+      else:
+        lastVal = val - curr
+    dec i
+
+func initCron*(minutes = everyMinute, hours = everyHour, monthDays = everyMonthDay, months = everyMonth, weekDays = everyWeekDay): Cron =
+  ## Makes a new cron timer
+  runnableExamples:
+    let everySecondSecond = initCron(minutes = {0.MinuteRange})
+  template res(field: untyped) =
+    ## Updates field in result with parameter of same name 
+    doAssert field.len > 0, "Can't have no valid values in set"
+    result.field = field
+  res minutes
+  res hours
+  res monthDays
+  res months
+  res weekDays
+
+
+proc translateCronNode(nodes: NimNode, every: NimNode): NimNode =
+  let rangeType = every.getTypeImpl[1]
+  
+  case nodes.kind:
+  of nnkIdent, nnkSym:
+    if nodes.eqIdent("any"):
+      result = every
+    else:
+      result = nnkCurly.newTree nodes
+  of nnkIntLit:
+    result = nnkCurly.newTree(
+        nnkCast.newTree(rangeType, nodes)
+    )
+  of nnkInfix:
+    case nodes[0].strVal:
+    of "-": # Range
+      if nodes[2].kind == nnkInfix:
+        "Both values in range must be numbers. If combining with `/` then make sure range is in brackets e.g. (5-10) / 2".error(nodes)
+
+      result = nnkCurly.newTree(
+        nnkInfix.newTree(
+          ident "..",
+          nnkCast.newTree(rangeType, nodes[1]),
+          nnkCast.newTree(rangeType, nodes[2])
+        )
+      )
+    of "/":
+      result = nnkInfix.newTree(
+        ident "/",
+        translateCronNode(if nodes[1].kind != nnkPar: nodes[1] else: nodes[1][0], every),
+        nodes[2]
+      )
+    else:
+      "Invalid operator only - , / are allowed".error(nodes)
+  of nnkCurly:
+    result = nodes
+    if nodes.len > 0:
+      nodes[0] = nnkCast.newTree(rangeType, nodes[0])
+    else:
+      "Empty set doesn't make sense".error(nodes)
+  else:
+    "Invalid syntax, check docs for how to use cron macro".error(nodes)  
+
+{.warning[Deprecated]: off.} # Use to ignore deprecated warning about any
+macro cron*(minutes, hours, monthDays, months, weekDays: untyped = any): Cron =
+  result = nnkCall.newTree bindSym("initCron")
+  echo minutes.treeRepr
+  result &= translateCronNode(minutes, bindSym("everyMinute"))
+  result &= translateCronNode(hours, bindSym("everyHour"))
+  result &= translateCronNode(monthDays, bindSym("everyMonthDay"))
+  result &= translateCronNode(months, bindSym("everyMonth"))
+  result &= translateCronNode(weekDays, bindSym("everyWeekDay"))
+{.warning[Deprecated]: on.}
+  
+func matches(date: DateTime, format: Cron): bool =
+  ## Returns true if date matches for format
+  date.minute in format.minutes and 
+  date.hour in format.hours and 
+  date.monthDay in format.monthDays and 
+  date.month in format.months and 
+  date.weekday in format.weekDays
+
+var doPrint* = false
+
+proc next*(now: DateTime, format: Cron): DateTime =
+  ## Returns next date that a cron would run from now
+  var doNext: bool
+
+  result = now
+  while not result.matches(format):
+    if doPrint:
+      echo result.format("yyyy-MM-dd hh:mm:ss")
+    result += format.minutes.incField(result.minute).minutes
+  
+func `<`(a, b: TaskBase[HandlerTypes]): bool {.inline.} = a.startTime < b.startTime
+func `==`(a, b: TaskBase[HandlerTypes]): bool {.inline.} = a.handler == b.handler
 
 proc defaultErrorHandler[T: HandlerTypes](tasks: SchedulerBase[T], task: TaskBase[T],  exception: ref Exception) =
   ## Default error handler, just raises the error further up the stack
@@ -95,7 +321,7 @@ proc newAsyncScheduler*(errorHandler: ErrorHandler[AsyncTaskHandler] = defaultEr
   ## See newScheduler_ for more details
   newSchedulerBase[AsyncTaskHandler](errorHandler)
 
-proc len*[T: HandlerTypes](scheduler: SchedulerBase[T]): int {.inline.} =
+proc len*(scheduler: SchedulerBase[HandlerTypes]): int {.inline.} =
   ## Returns number of tasks in the scheduler
   scheduler.tasks.len
 
@@ -159,7 +385,7 @@ proc wait*[T: HandlerTypes](scheduler: SchedulerBase[T], interval: TimeInterval,
 
   scheduler.at(now() + interval, handler, name)
 
-proc milliSecondsLeft[T: HandlerTypes](task: TaskBase[T]): int =
+proc milliSecondsLeft(task: TaskBase[HandlerTypes]): int =
   ## Returns time different in milliseconds between now and the tasks start time
   result = int((task.startTime - getTime()).inMilliseconds)
 
@@ -181,7 +407,7 @@ proc del*[T: HandlerTypes](scheduler: SchedulerBase[T], task: TaskBase[T]) =
   let index = scheduler.tasks.find task
   scheduler.tasks.del index
 
-proc del*[T: HandlerTypes](scheduler: SchedulerBase[T], task: string) =
+proc del*(scheduler: SchedulerBase[HandlerTypes], task: string) =
   ## Removes a task from the scheduler (via its name).
   ## If there are multiple tasks with the same name then the first task is deleted
   runnableExamples:
@@ -253,16 +479,5 @@ proc start*(scheduler: AsyncScheduler | Scheduler) {.multisync.} =
       # Add task back so it can be waited on again
       scheduler &= currTask
 
-
-when isMainModule:
-  let tasks = newAsyncScheduler()
-
-  let now = now()
-  tasks.every(1.seconds) do () {.async.}:
-    echo "Hello"
-    echo (now() - now).inSeconds
-
-  waitFor tasks.start()
-
+  
 export times
-export asyncdispatch

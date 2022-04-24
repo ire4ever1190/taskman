@@ -1,5 +1,5 @@
 import taskman
-import std/[unittest, asyncdispatch]
+import std/unittest
 import std/os
 import std/monotimes
 
@@ -21,7 +21,7 @@ template checkTakes(seconds: int, range = -10..10): untyped =
   defer:
     tasks.start()
     let diff = (now() - start).inMilliseconds - (seconds * 1000)
-    check diff in range #
+    check diff in range
 
 let tasks = newScheduler()
 
