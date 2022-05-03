@@ -110,9 +110,12 @@ type
   Task* = TaskBase[TaskHandler]
   AsyncTask* = TaskBase[AsyncTaskHandler]
 
-  RemoveTaskException* = CatchableError
+  RemoveTaskException* = object of CatchableError
     ## Throw this within a task to remove it from the scheduler
 
+  InfiniteCronTask* = object of CatchableError
+    ## Gets thrown when a cron task keeps looping
+    # TODO: remove, this shouldn't happen ever
 
 const 
   defaultTaskName* {.strdefine.} = "task"
@@ -136,11 +139,11 @@ func min[T](s: set[T]): int =
 
 func max[T](s: set[T]): T =
   ## Returns largest element that is in set[T]
-  var i = T.high.int
-  while i >= T.low.int:
-    if T(i) in s:
-      return T(i)
-    dec i
+  result = T.high
+  while result >= T.low:
+    if result in s:
+      break
+    dec result
 
 
 
@@ -198,7 +201,7 @@ proc translateCronNode(nodes: NimNode, every: NimNode): NimNode =
   
   case nodes.kind:
   of nnkIdent, nnkSym:
-    if nodes.eqIdent("any"):
+    if nodes.eqIdent("x"):
       result = every
     else:
       result = nnkCurly.newTree nodes
@@ -236,16 +239,29 @@ proc translateCronNode(nodes: NimNode, every: NimNode): NimNode =
   else:
     "Invalid syntax, check docs for how to use cron macro".error(nodes)  
 
-{.warning[Deprecated]: off.} # Use to ignore deprecated warning about any
-macro cron*(minutes, hours, monthDays, months, weekDays: untyped = any): Cron =
+var x: int # We need some symbol to exist for the default value
+macro cron*(minutes, hours, monthDays, months, weekDays: untyped = x): Cron =
+  ## Macro to simplify creating cron formats. 
+  ## Syntax is similar to cron
+  ##
+  ## * `/`: Define count
+  ## * `{}`: Provide list of values
+  ## * `-`: Define range
+  ## * `x`: Specify any value
+  runnableExamples:
+    discard cron(x, x, x, x, x) # * * * * *
+    discard cron(minutes = 5)   # 5 * * * *
+
+    # Do between minutes of 5 and 10 during either 1 am or 5 am
+    # do this every second day of the month
+    discard cron(5 - 10, {1, 5}, x / 2, x, x) 
+    
   result = nnkCall.newTree bindSym("initCron")
-  echo minutes.treeRepr
   result &= translateCronNode(minutes, bindSym("everyMinute"))
   result &= translateCronNode(hours, bindSym("everyHour"))
   result &= translateCronNode(monthDays, bindSym("everyMonthDay"))
   result &= translateCronNode(months, bindSym("everyMonth"))
   result &= translateCronNode(weekDays, bindSym("everyWeekDay"))
-{.warning[Deprecated]: on.}
   
 func matches(date: DateTime, format: Cron): bool =
   ## Returns true if date matches for format
@@ -266,26 +282,69 @@ func possibleDays(allowedDays: set[WeekDay], date: DateTime): set[MonthDayRange]
 # From https://github.com/soasme/nim-schedules/blob/master/src/schedules/cron/cron.nim#L201
 proc ceil(dt: DateTime): DateTime =
   result = dt
+  # Round to next second
   if dt.nanosecond > 0:
     result -= initTimeInterval(nanoseconds=dt.nanosecond)
     result += initTimeInterval(seconds=1)
+  # Round to next minute
   if dt.second > 0:
     result += initTimeInterval(seconds=(60 - dt.second))
 
 const maxYears {.intdefine.} = 3 # Max years to search ahead to find cron time
 proc next*(now: DateTime, format: Cron): DateTime =
   ## Returns next date that a cron would run from now
-  var doNext: bool
+  # Implementation from here
+  # https://github.com/robfig/cron/blob/master/spec.go#L58
+  # Idea is to 
+  # * Go through each field from largest (month) to smallest (minute)
+  #   and If the field doesnt match the format then reset the other fields to zero (only if not zeroed before) and increment to next
+  #   valid value
+  # * Increment the minute no matter what so the timer does increase
+  # * Continiously do this until the format matches
 
+  var zerod = false
   result = now.ceil()
+  var last = result
   let startYear = now.year
-  # TODO: Throw exception on infinite loop?
-  while not result.matches(format) and now.year - startYear <= maxYears:
-    result += format.minutes.incField(result.minute).minutes
-    result += format.hours.incField(result.hour).hours
-    result += (format.weekDays.possibleDays(result) * format.monthDays).incField(result.monthDay).days
-    result += format.months.incField(result.month).months
   
+  while not result.matches(format) and now.year - startYear <= maxYears:
+    block wrap:
+      while (result.month notin format.months):
+        if not zerod:
+          zerod = true
+          result = dateTime(result.year, result.month, 1)
+        result += 1.months
+        if result.month == mJan:
+          break wrap
+          
+      while (result.monthDay notin format.monthDays or result.weekDay notin format.weekDays):
+        # echo result.monthDay, " ", format.monthDays
+        # echo result.weekDay, " ", format.weekDays
+        # echo ""
+        if not zerod:
+          zerod = true
+          result = dateTime(result.year, result.month, result.monthDay)
+        result += 1.days
+        if result.monthDay == 1:
+          break wrap
+
+      while (result.hour notin format.hours):
+        if not zerod:
+          zerod = true
+          result = dateTime(result.year, result.month, result.monthDay, result.hour)
+        result += 1.hours
+        if result.hour == 0:
+          break wrap
+
+      while (result.minute notin format.minutes):
+        result += 1.minutes
+        if result.minute == 0:
+          break wrap
+
+    if result == now:
+      result += 1.minutes
+      # raise (ref InfiniteCronTask)(msg: "rip")
+
 func `<`(a, b: TaskBase[HandlerTypes]): bool {.inline.} = a.startTime < b.startTime
 func `==`(a, b: TaskBase[HandlerTypes]): bool {.inline.} = a.handler == b.handler
 
