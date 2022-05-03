@@ -151,9 +151,9 @@ func `/`*[T: CronRanges](a: set[T], inc: int): set[T] =
   ## Returns a range of values that count up by inc
   runnableExamples:
     # Set of values to run every second day
-    assert EveryWeekDay / 2 == {dMon, dWed, dFri, dSun} 
+    assert everyWeekDay / 2 == {dMon, dWed, dFri, dSun} 
     # Only use every third hour in our range
-    assert {5.HourRange .. 15.HourRange} / 4 == {5.HourRange, 9.HourRange, 13.HourRange}
+    assert {5.HourRange .. 15} / 4 == {5.HourRange, 9, 13}
 
   var curr = a.min
     # Highest value that is currently in the set, don't go past it
@@ -197,6 +197,7 @@ func initCron*(minutes = everyMinute, hours = everyHour, monthDays = everyMonthD
 
 
 proc translateCronNode(nodes: NimNode, every: NimNode): NimNode =
+  ## Translates the DSL into actual NimNode
   let rangeType = every.getTypeImpl[1]
   
   case nodes.kind:
@@ -222,7 +223,7 @@ proc translateCronNode(nodes: NimNode, every: NimNode): NimNode =
           nnkCast.newTree(rangeType, nodes[2])
         )
       )
-    of "/":
+    of "/": # Count
       result = nnkInfix.newTree(
         ident "/",
         translateCronNode(if nodes[1].kind != nnkPar: nodes[1] else: nodes[1][0], every),
@@ -230,7 +231,7 @@ proc translateCronNode(nodes: NimNode, every: NimNode): NimNode =
       )
     else:
       "Invalid operator only - , / are allowed".error(nodes)
-  of nnkCurly:
+  of nnkCurly: # Set 
     result = nodes
     if nodes.len > 0:
       nodes[0] = nnkCast.newTree(rangeType, nodes[0])
@@ -249,12 +250,16 @@ macro cron*(minutes, hours, monthDays, months, weekDays: untyped = x): Cron =
   ## * `-`: Define range
   ## * `x`: Specify any value
   runnableExamples:
-    discard cron(x, x, x, x, x) # * * * * *
-    discard cron(minutes = 5)   # 5 * * * *
+    assert cron(x, x, x, x, x) == initCron() # * * * * *
+    assert cron(minutes = 5) == initCron(minutes = {5.MinuteRange}) # 5 * * * *
 
     # Do between minutes of 5 and 10 during either 1 am or 5 am
     # do this every second day of the month
-    discard cron(5 - 10, {1, 5}, x / 2, x, x) 
+    assert cron(5 - 10, {1, 5}, x / 2, x, x) == initCron(
+      {5.MinuteRange .. 10},
+      {1.HourRange, 5}, 
+      everyMonthDay / 2
+    )
     
   result = nnkCall.newTree bindSym("initCron")
   result &= translateCronNode(minutes, bindSym("everyMinute"))

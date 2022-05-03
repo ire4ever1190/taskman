@@ -31,5 +31,8 @@ jobs:
     - name: Update nimble
       run: nimble update
 
-    - name: Run Tests
+    - name: Run tests
       run: nimble test
+
+    - name: Run doc examples
+      run: nimble doc src/taskman.nim
