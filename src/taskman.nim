@@ -299,16 +299,25 @@ proc next*(now: DateTime, format: Cron): DateTime =
   # * Go through each field from largest (month) to smallest (minute)
   #   and If the field doesnt match the format then reset the other fields to zero (only if not zeroed before) and increment to next
   #   valid value
-  # * Increment the minute no matter what so the timer does increase
   # * Continiously do this until the format matches
 
   var zerod = false
-  result = now.ceil()
-  var last = result
-  let startYear = now.year
-  
-  while not result.matches(format) and now.year - startYear <= maxYears:
+  let maxYear = now.year + maxYears
+  result = now
+
+  # If the format currently matches the date then increment
+  # it to the next minute.
+  if result.matches(format):
+    result += 1.minutes
+    # Truncate the smaller values so it doesn't get ceiled.
+    # For some reason putting the ceil in an else block breaks stuff
+    result -= result.nanosecond.nanoseconds
+    result -= result.second.seconds
+    
+  result = result.ceil()
+  while not result.matches(format) and now.year <= maxYear:
     block wrap:
+      # TODO: Optimise, be smarter in finding next value instead of looping
       while (result.month notin format.months):
         if not zerod:
           zerod = true
@@ -318,9 +327,6 @@ proc next*(now: DateTime, format: Cron): DateTime =
           break wrap
           
       while (result.monthDay notin format.monthDays or result.weekDay notin format.weekDays):
-        # echo result.monthDay, " ", format.monthDays
-        # echo result.weekDay, " ", format.weekDays
-        # echo ""
         if not zerod:
           zerod = true
           result = dateTime(result.year, result.month, result.monthDay)
@@ -337,13 +343,12 @@ proc next*(now: DateTime, format: Cron): DateTime =
           break wrap
 
       while (result.minute notin format.minutes):
+        if not zerod:
+          zerod = true
         result += 1.minutes
         if result.minute == 0:
           break wrap
-
-    if result == now:
-      result += 1.minutes
-      # raise (ref InfiniteCronTask)(msg: "rip")
+          
 
 func `<`(a, b: TaskBase[HandlerTypes]): bool {.inline.} = a.startTime < b.startTime
 func `==`(a, b: TaskBase[HandlerTypes]): bool {.inline.} = a.handler == b.handler
