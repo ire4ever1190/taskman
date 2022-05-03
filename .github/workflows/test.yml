@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        nim: ['1.4.0', 'stable', 'devel' ]
+        nim: ['stable', 'devel' ]
       fail-fast: false
       max-parallel: 3
 
