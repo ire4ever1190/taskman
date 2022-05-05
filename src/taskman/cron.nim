@@ -165,8 +165,9 @@ proc next*(now: DateTime, format: Cron): DateTime {.raises: [TooFarAheadCron].} 
         result += 1.minutes
         if result.minute == 0:
           break wrap
-  if now.year > maxYear:
-    raise (ref TooFarAheadCron)(msg: "Could not find next valid date for " & $format)
+
+    if result.year > maxYear:
+      raise (ref TooFarAheadCron)(msg: "Could not find next valid date for " & $format)
           
 func initCron*(minutes = everyMinute, hours = everyHour, 
                monthDays = everyMonthDay, months = everyMonth, 

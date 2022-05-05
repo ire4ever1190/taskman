@@ -56,9 +56,14 @@ suite "Cron timing":
     )
 
     initCron().check(
-      "2000-01-10 00:00:00",
+      "2000-01-10 00:00:34",
       "2000-01-10 00:01:00"
     )
+
+    let everyMin = cron(x, x, x, x, x)
+    let act = dateTime(2022, mMar, 30, 16, 0, 10, 50).next(everyMin).next(everyMin)
+    let exp = dateTime(2022, mMar, 30, 16, 2, 0, 0)
+    check act == exp
     
   test "* * 1-6 * *":
     initCron(months={mJan, mJun}).check(

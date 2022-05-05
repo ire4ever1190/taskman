@@ -229,6 +229,7 @@ proc newTask*[T: HandlerTypes](cron: Cron, handler: T, name = defaultTaskName): 
     kind: Cron,
     handler: handler,
     startTime: now().next(cron).toTime(),
+    cronFormat: cron,
     name: name
   )
 
@@ -373,7 +374,6 @@ proc start*(scheduler: AsyncScheduler | Scheduler) {.multisync.} =
         # Schedule task again
         currTask.startTime = currTask.next()
         scheduler &= currTask
-
       try:
         await currTask.handler()
       except RemoveTaskException:

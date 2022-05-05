@@ -64,7 +64,9 @@ when defined(testCron):
   # Since it takes minimum 1 for a cron task to run we will put it behind a flag
   suite "Cron":
     test "* * * * *":
+      # TODO: Wait til start of minute to start running test
       checkTakes 5 * 60:
         tasks.every(cron(x, x, x, x, x)) do ():
+          echo "Minute has passed"
           onlyRun(5)
           
