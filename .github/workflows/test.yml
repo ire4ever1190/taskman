@@ -34,5 +34,5 @@ jobs:
     - name: Run tests
       run: nimble test
 
-    - name: Run doc examples
+    - name: Test doc examples
       run: nimble doc src/taskman.nim

@@ -1,12 +1,5 @@
-
-# Check which async to use
-const asyncBackend {.strdefine.} = ""
-when asyncBackend == "chronos":
-  import chronos
-  export chronos
-else:
-  import std/asyncdispatch
-  export asyncdispatch
+import std/asyncdispatch
+export asyncdispatch
   
 import std/[
   times,
@@ -15,6 +8,9 @@ import std/[
   macros
 ]
 
+import taskman/cron
+
+# Only force tasks to be gcsafe when threads are on
 when compileOption("threads"):
   {.pragma: threadsafe, gcsafe.}
 else:
@@ -30,45 +26,94 @@ else:
 ##
 ## The main procs for creating tasks are 
 ##
-## * every_ When you want a task to run on an interval
+## * every_ When you want a task to run on an interval (First run is when start() is called)
 ## * at_ When you want the task to run once at a certain date (Runs once)
 ## * wait_ When you want to wait a certain amount of time and then run the task (Runs once)
 ##
 
 runnableExamples "-r:off":
-  let tasks = newScheduler() # or newAsyncScheduler if your tasks are async
+  let tasks = newAsyncScheduler() # or newScheduler if you don't want to use async
 
-  tasks.every(5.minutes) do ():
+  tasks.every(5.minutes) do () {.async.}:
     echo "This will run every 5 minutes"
 
-  tasks.at("2077-01-1".parse("yyyy-mm-dd")) do ():
+  tasks.at("2077-01-1".parse("yyyy-mm-dd")) do () {.async.}:
     echo "This will run on the 1st of janurary in 2077"
 
-  tasks.wait(10.hours) do ():
+  tasks.wait(10.hours) do () {.async.}:
     echo "This will run after 10 hours"
 
   # Block the thread and run tasks when needed
-  # Async scheduler can run in background with asyncCheck if you want to run other stuff (e.g. website)
-  tasks.start()
+  # asyncCheck could be used instead e.g. so you can have a web server running also
+  # You could also put it onto another thread
+  waitFor tasks.start()
 
+## Deleting Tasks
+## ==============
+##
+## Tasks can be directly removed using del_
+
+runnableExamples:
+  let 
+    tasks = newScheduler()
+    taskA = newTask[TaskHandler](5.seconds, proc () = echo "hello")
+
+  tasks &= taskA
+  tasks.every(1.days, (proc () = echo "A new dawn appears"), name = "newDay")
+  assert tasks.len == 2
+
+  # Tasks can be deleted either with their name or using the original task obj
+  tasks.del taskA
+  tasks.del "newDay"
+  assert tasks.len == 0
+
+## If inside a task, then removeTask_ can be used to remove the current task (This is just a helper to raise RemoveTaskException_).
+## onlyRun_ is another helper which calls removeTask_ after a task has run a certain number of times
+runnableExamples:
+  let tasks = newScheduler()
+
+  tasks.every(1.milliseconds) do ():
+    if true:
+      echo "I don't want to run anymore"
+      removeTask() #
+
+  tasks.every(1.milliseconds) do ():
+    if not false:
+      raise (ref RemoveTaskException)()
+
+  var i = 1
+  tasks.every(1.nanoseconds) do ():
+    onlyRun(3)
+    # This task will only run three times (Terminates at the end of the 3 run)
+    echo i
+    inc i
+
+  assert tasks.len == 3
+  tasks.start() # Tasks will be deleted when ran in this scenario
+  assert tasks.len == 0
+
+## Cron
+## ====
+##
+## For more advanced intervals you can instead use cron timers
+##
+runnableExamples:
+  let tasks = newScheduler()
+
+  # Just like * * * * *
+  tasks.every(cron(x, x, x, x, x)) do ():
+    echo "Minute has passed"
+
+  tasks.every(cron(5, 10, x, x, x)) do ():
+    echo "It is the 5th minute of the 10th hour"
+
+## See the cron module for more info on the syntax
 
 type
-  # CronPartType = enum
-
-  CronRanges = MinuteRange or HourRange or MonthDayRange or Month or WeekDay
-  
-  TaskType = enum
+  TimerKind = enum
     Interval
     OneShot
-    CronTask
-
-  Cron* = object
-    ## The five star (*) values of a cronjob
-    minutes*: set[MinuteRange]
-    hours*: set[HourRange]
-    monthDays*: set[MonthDayRange]
-    months*: set[Month]
-    weekDays*: set[WeekDay]
+    Cron
     
   TaskBase*[T: HandlerTypes] = ref object
     ## * **handler**: The proc that handles the task being called
@@ -78,10 +123,12 @@ type
     handler*: T
     startTime*: Time
     name*: string
-    case oneShot*: bool # Whether the task runs repeatedly or only once
-    of false:
+    case kind*: TimerKind
+    of Interval:
       interval*: TimeInterval
-    of true: discard
+    of Cron:
+      cronFormat*: Cron
+    of OneShot: discard # only fires for startTime
         
   AsyncTaskHandler* = proc (): Future[void] {.threadsafe.}
     ## Proc that runs in an async scheduler
@@ -117,243 +164,6 @@ type
     ## Gets thrown when a cron task keeps looping
     # TODO: remove, this shouldn't happen ever
 
-const 
-  defaultTaskName* {.strdefine.} = "task"
-    ## Default name for a task. Will be shown in error messages
-  everyMinute* = {0.MinuteRange .. 59}
-    ## Use with cron task to run every minute
-  everyHour* = {0.HourRange .. 23}
-    ## Use with cron task to run every hour
-  everyMonthDay* = {1.MonthDayRange .. 31}
-    ## use with cron task to run every day in the month
-  everyMonth* = {mJan .. mDec}
-    ## Use with cron task to run every month
-  everyWeekDay* = {dMon .. dSun}
-    ## Use with cron task to run every day in the week
-  
-
-func min[T](s: set[T]): int =
-  ## Returns smallest element that is in set[T]
-  for i in s:
-    return i.ord
-
-func max[T](s: set[T]): T =
-  ## Returns largest element that is in set[T]
-  result = T.high
-  while result >= T.low:
-    if result in s:
-      break
-    dec result
-
-
-
-func `/`*[T: CronRanges](a: set[T], inc: int): set[T] =
-  ## Returns a range of values that count up by inc
-  runnableExamples:
-    # Set of values to run every second day
-    assert everyWeekDay / 2 == {dMon, dWed, dFri, dSun} 
-    # Only use every third hour in our range
-    assert {5.HourRange .. 15} / 4 == {5.HourRange, 9, 13}
-
-  var curr = a.min
-    # Highest value that is currently in the set, don't go past it
-  let max = a.max.ord
-
-  while curr <= max:
-    if T(curr) in a:
-      result.incl T(curr)
-    let next = curr.int + inc
-    # Check if the next value is valid in the full range
-    if next >= T.low.int and next <= T.high.int:
-      curr = curr.int + inc
-    else:
-      break
-
-
-func incField[T: CronRanges](s: set[T], curr: T): int =
-  ## Returns the value needed to increment a field to the next value.
-  ## If the value wraps around then it returns a large enough value to cause that wrap around
-  for item in s:
-    if item >= curr:
-      return item.ord - curr.ord
-  return (T.high.int - curr.ord) + s.min
-  
-func monthDays(d: DateTime): set[MonthDayRange] =
-  {1.MonthDayRange .. d.month.getDaysInMonth(d.year)}
-
-func initCron*(minutes = everyMinute, hours = everyHour, monthDays = everyMonthDay, months = everyMonth, weekDays = everyWeekDay): Cron =
-  ## Makes a new cron timer
-  runnableExamples:
-    let everySecondSecond = initCron(minutes = {0.MinuteRange})
-  template res(field: untyped) =
-    ## Updates field in result with parameter of same name 
-    doAssert field.len > 0, "Can't have no valid values in set"
-    result.field = field
-  res minutes
-  res hours
-  res monthDays
-  res months
-  res weekDays
-
-
-proc translateCronNode(nodes: NimNode, every: NimNode): NimNode =
-  ## Translates the DSL into actual NimNode
-  let rangeType = every.getTypeImpl[1]
-  
-  case nodes.kind:
-  of nnkIdent, nnkSym:
-    if nodes.eqIdent("x"):
-      result = every
-    else:
-      result = nnkCurly.newTree nodes
-  of nnkIntLit:
-    result = nnkCurly.newTree(
-        nnkCast.newTree(rangeType, nodes)
-    )
-  of nnkInfix:
-    case nodes[0].strVal:
-    of "-": # Range
-      if nodes[2].kind == nnkInfix:
-        "Both values in range must be numbers. If combining with `/` then make sure range is in brackets e.g. (5-10) / 2".error(nodes)
-
-      result = nnkCurly.newTree(
-        nnkInfix.newTree(
-          ident "..",
-          nnkCast.newTree(rangeType, nodes[1]),
-          nnkCast.newTree(rangeType, nodes[2])
-        )
-      )
-    of "/": # Count
-      result = nnkInfix.newTree(
-        ident "/",
-        translateCronNode(if nodes[1].kind != nnkPar: nodes[1] else: nodes[1][0], every),
-        nodes[2]
-      )
-    else:
-      "Invalid operator only - , / are allowed".error(nodes)
-  of nnkCurly: # Set 
-    result = nodes
-    if nodes.len > 0:
-      nodes[0] = nnkCast.newTree(rangeType, nodes[0])
-    else:
-      "Empty set doesn't make sense".error(nodes)
-  else:
-    "Invalid syntax, check docs for how to use cron macro".error(nodes)  
-
-var x: int # We need some symbol to exist for the default value
-macro cron*(minutes, hours, monthDays, months, weekDays: untyped = x): Cron =
-  ## Macro to simplify creating cron formats. 
-  ## Syntax is similar to cron
-  ##
-  ## * `/`: Define count
-  ## * `{}`: Provide list of values
-  ## * `-`: Define range
-  ## * `x`: Specify any value
-  runnableExamples:
-    assert cron(x, x, x, x, x) == initCron() # * * * * *
-    assert cron(minutes = 5) == initCron(minutes = {5.MinuteRange}) # 5 * * * *
-
-    # Do between minutes of 5 and 10 during either 1 am or 5 am
-    # do this every second day of the month
-    assert cron(5 - 10, {1, 5}, x / 2, x, x) == initCron(
-      {5.MinuteRange .. 10},
-      {1.HourRange, 5}, 
-      everyMonthDay / 2
-    )
-    
-  result = nnkCall.newTree bindSym("initCron")
-  result &= translateCronNode(minutes, bindSym("everyMinute"))
-  result &= translateCronNode(hours, bindSym("everyHour"))
-  result &= translateCronNode(monthDays, bindSym("everyMonthDay"))
-  result &= translateCronNode(months, bindSym("everyMonth"))
-  result &= translateCronNode(weekDays, bindSym("everyWeekDay"))
-  
-func matches(date: DateTime, format: Cron): bool =
-  ## Returns true if date matches for format
-  date.minute in format.minutes and 
-  date.hour in format.hours and 
-  date.monthDay in format.monthDays and 
-  date.month in format.months and 
-  date.weekday in format.weekDays
-
-var doPrint* = false
-
-func possibleDays(allowedDays: set[WeekDay], date: DateTime): set[MonthDayRange] =
-  for monthDay in date.monthDays:
-    let day = monthDay.getDayOfWeek(date.month, date.year)
-    if day in allowedDays:
-      result.incl monthDay
-
-# From https://github.com/soasme/nim-schedules/blob/master/src/schedules/cron/cron.nim#L201
-proc ceil(dt: DateTime): DateTime =
-  result = dt
-  # Round to next second
-  if dt.nanosecond > 0:
-    result -= initTimeInterval(nanoseconds=dt.nanosecond)
-    result += initTimeInterval(seconds=1)
-  # Round to next minute
-  if dt.second > 0:
-    result += initTimeInterval(seconds=(60 - dt.second))
-
-const maxYears {.intdefine.} = 3 # Max years to search ahead to find cron time
-proc next*(now: DateTime, format: Cron): DateTime =
-  ## Returns next date that a cron would run from now
-  # Implementation from here
-  # https://github.com/robfig/cron/blob/master/spec.go#L58
-  # Idea is to 
-  # * Go through each field from largest (month) to smallest (minute)
-  #   and If the field doesnt match the format then reset the other fields to zero (only if not zeroed before) and increment to next
-  #   valid value
-  # * Continiously do this until the format matches
-
-  var zerod = false
-  let maxYear = now.year + maxYears
-  result = now
-
-  # If the format currently matches the date then increment
-  # it to the next minute.
-  if result.matches(format):
-    result += 1.minutes
-    # Truncate the smaller values so it doesn't get ceiled.
-    # For some reason putting the ceil in an else block breaks stuff
-    result -= result.nanosecond.nanoseconds
-    result -= result.second.seconds
-    
-  result = result.ceil()
-  while not result.matches(format) and now.year <= maxYear:
-    block wrap:
-      # TODO: Optimise, be smarter in finding next value instead of looping
-      while (result.month notin format.months):
-        if not zerod:
-          zerod = true
-          result = dateTime(result.year, result.month, 1)
-        result += 1.months
-        if result.month == mJan:
-          break wrap
-          
-      while (result.monthDay notin format.monthDays or result.weekDay notin format.weekDays):
-        if not zerod:
-          zerod = true
-          result = dateTime(result.year, result.month, result.monthDay)
-        result += 1.days
-        if result.monthDay == 1:
-          break wrap
-
-      while (result.hour notin format.hours):
-        if not zerod:
-          zerod = true
-          result = dateTime(result.year, result.month, result.monthDay, result.hour)
-        result += 1.hours
-        if result.hour == 0:
-          break wrap
-
-      while (result.minute notin format.minutes):
-        if not zerod:
-          zerod = true
-        result += 1.minutes
-        if result.minute == 0:
-          break wrap
-          
 
 func `<`(a, b: TaskBase[HandlerTypes]): bool {.inline.} = a.startTime < b.startTime
 func `==`(a, b: TaskBase[HandlerTypes]): bool {.inline.} = a.handler == b.handler
@@ -380,7 +190,7 @@ proc newScheduler*(errorHandler: ErrorHandler[TaskHandler] = defaultErrorHandler
       # and used in multiple schedulers and also be gcsafe
       echo exception.msg
       task.startTime = getTime() + 5.seconds
-
+  #==#
   newSchedulerBase[TaskHandler](errorHandler)
   
 proc newAsyncScheduler*(errorHandler: ErrorHandler[AsyncTaskHandler] = defaultErrorHandler[AsyncTaskHandler]): AsyncScheduler =
@@ -396,10 +206,10 @@ proc newTask*[T: HandlerTypes](interval: TimeInterval, handler: T, name = defaul
   ## Creates a new task which can be added to a scheduler.
   ## This task will run every `interval`
   TaskBase[T](
+      kind: Interval,
       handler: handler,
       interval: interval,
       startTime: getTime(),
-      oneShot: false,
       name: name
   )
 
@@ -407,9 +217,18 @@ proc newTask*[T: HandlerTypes](time: DateTime, handler: T, name = defaultTaskNam
   ## Creates a new task which can be added to a scheduler.
   ## This task will only run once (will run at **time**)
   TaskBase[T](
+    kind: OneShot,
     handler: handler,
     startTime: time.toTime(),
-    oneshot: true,
+    name: name
+  )
+
+proc newTask*[T: HandlerTypes](cron: Cron, handler: T, name = defaultTaskName): TaskBase[T] =
+  ## Creates a new task which can be added to a scheduler.
+  TaskBase[T](
+    kind: Cron,
+    handler: handler,
+    startTime: now().next(cron).toTime(),
     name: name
   )
 
@@ -427,9 +246,19 @@ proc every*[T: HandlerTypes](scheduler: SchedulerBase[T]; interval: TimeInterval
 
     tasks.every(2.hours) do () {.async.}:
       echo "2 hours has passed, see you again in 2 hours"
-
+  #==#
   scheduler &= newTask(interval, handler, name)
 
+proc every*[T: HandlerTypes](scheduler: SchedulerBase[T], cron: Cron, handler: T, name = defaultTaskName) =
+  ## Runs a task every time a cron timer is valid
+  runnableExamples:
+    let tasks = newAsyncScheduler()
+
+    tasks.every(cron(x, x, x, x, x)) do () {.async.}:
+      echo "A minute has passed"
+  #==#
+  scheduler &= newTask(cron, handler, name)
+  
 proc at*[T: HandlerTypes](scheduler: SchedulerBase[T], time: DateTime, handler: T, name = defaultTaskName) =
   ## Runs a task at a certain date/time (only runs once).
   runnableExamples:
@@ -437,7 +266,7 @@ proc at*[T: HandlerTypes](scheduler: SchedulerBase[T], time: DateTime, handler: 
 
     tasks.at("2077-03-06".parse("yyyy-MM-dd")) do () {.async.}:
       echo "The date is now 2077-03-06"
-
+  #==#
   scheduler &= newTask(time, handler, name)
 
 proc wait*[T: HandlerTypes](scheduler: SchedulerBase[T], interval: TimeInterval, handler: T, name = defaultTaskName) =
@@ -449,7 +278,7 @@ proc wait*[T: HandlerTypes](scheduler: SchedulerBase[T], interval: TimeInterval,
     # I need to send message reminder in a few minutes
     tasks.wait(5.minutes) do () {.async.}:
       asyncCheck client.post("http://notificationurl.com", "Your reminder message")
-
+  #==#
   scheduler.at(now() + interval, handler, name)
 
 proc milliSecondsLeft(task: TaskBase[HandlerTypes]): int =
@@ -470,7 +299,7 @@ proc del*[T: HandlerTypes](scheduler: SchedulerBase[T], task: TaskBase[T]) =
     # Then the task can be deleted anytime later
     tasks.del task
     doAssert tasks.len == 0
-
+  #==#
   let index = scheduler.tasks.find task
   scheduler.tasks.del index
 
@@ -484,7 +313,7 @@ proc del*(scheduler: SchedulerBase[HandlerTypes], task: string) =
     tasks.every(5.minutes, handler, name = "time pass")
     tasks.del "time pass"
     doAssert tasks.len == 0
-
+  #==#
   for i in 0..<scheduler.len:
     if scheduler.tasks[i].name == task:
       scheduler.tasks.del i
@@ -502,8 +331,18 @@ proc removeTask*() =
       else:
         # Do important stuff
         inc i
-
+  #==#
   raise newException(RemoveTaskException, "")
+
+proc next*(task: TaskBase): Time {.raises: [TooFarAheadCron].} =
+  ## Returns the next date that a task will run at (If it ran now).
+  ## If the task is a oneShot then it just returns its start time
+  case task.kind
+  of OneShot: discard
+  of Interval:
+    result = getTime() + task.interval
+  of Cron:
+    result = now().next(task.cronFormat).toTime()
 
 template onlyRun*(times: int) =
   ## Make task only run a certain number of times
@@ -512,7 +351,7 @@ template onlyRun*(times: int) =
     tasks.every(5.seconds) do ():
       onlyRun(5) # This is like the example in removeTask
 
-  var timesRan {.global.} = 0
+  var timesRan {.global.} = 1
   defer:
     if timesRan == times:
       removeTask()
@@ -530,9 +369,9 @@ proc start*(scheduler: AsyncScheduler | Scheduler) {.multisync.} =
       sleep scheduler.tasks[0].milliSecondsLeft
     var currTask = scheduler.tasks.pop()
     if getTime() >= currTask.startTime:
-      if not currTask.oneShot:
+      if currTask.kind != OneShot:
         # Schedule task again
-        currTask.startTime = getTime() + currTask.interval
+        currTask.startTime = currTask.next()
         scheduler &= currTask
 
       try:
@@ -548,6 +387,4 @@ proc start*(scheduler: AsyncScheduler | Scheduler) {.multisync.} =
 
   
 export times
-when isMainModule:
-  let s = {1.MonthDayRange, 10, 12}
-  echo s.incField(13)
+export cron
