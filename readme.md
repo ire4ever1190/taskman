@@ -1,10 +1,12 @@
+## Taskman
+
 A simple and lightweight async/sync scheduling library for running tasks at certain times.
 
 Supports
 - Running on an interval e.g. every 5 minutes, every 2.5 seconds
 - Running on a set date
 - Run after an amount of time e.g. run after 10 hours
-- Run on cron format e.g. 10 4 * * * (Run on the 10th minute of the 4th hour everyday)
+- Run on cron format e.g. `10 4 * * *` (Run on the 10th minute of the 4th hour everyday)
 
 Go to the [docs here](https://tempdocs.netlify.app/taskman/stable) for more information and examples
 
@@ -25,10 +27,10 @@ var ip = ""
 tasks.every(1.days) do () {.async.}:
 	let client = newAsyncHttpClient()
 	ip = client
-				.getContent("https://httpbin.org/ip")
-				.parseJson()["origin"]
-				.getStr()
-	client.close()
+    .getContent("https://httpbin.org/ip")
+    .parseJson()["origin"]
+    .getStr()
+  client.close()
 
 waitFor tasks.start()
 ```
