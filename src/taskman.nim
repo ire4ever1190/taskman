@@ -107,7 +107,7 @@ runnableExamples:
   tasks.every(cron(5, 10, x, x, x)) do ():
     echo "It is the 5th minute of the 10th hour"
 
-## See the cron module for more info on the syntax
+## See the `cron module <taskman/cron.html>`_ for more info on the syntax
 
 type
   TimerKind = enum
@@ -149,6 +149,7 @@ type
 
   SchedulerBase*[T: HandlerTypes] = ref object
     tasks*: HeapQueue[TaskBase[T]]
+    running*: bool
     errorHandler*: ErrorHandler[T]
 
   Scheduler* = SchedulerBase[TaskHandler]
@@ -164,6 +165,9 @@ type
     ## Gets thrown when a cron task keeps looping
     # TODO: remove, this shouldn't happen ever
 
+
+const defaultTaskName* {.strdefine.} = "task"
+  ## Default name for a task. Will be shown in error messages
 
 func `<`(a, b: TaskBase[HandlerTypes]): bool {.inline.} = a.startTime < b.startTime
 func `==`(a, b: TaskBase[HandlerTypes]): bool {.inline.} = a.handler == b.handler
@@ -363,6 +367,7 @@ proc start*(scheduler: AsyncScheduler | Scheduler) {.multisync.} =
   ## Starts running the tasks.
   ## Call with `asyncCheck` to make it run in the background
   const isAsync = scheduler is AsyncScheduler
+  scheduler.running = true
   while scheduler.len > 0:
     when isAsync: # Check if in async
       await sleepAsync scheduler.tasks[0].milliSecondsLeft
@@ -385,6 +390,7 @@ proc start*(scheduler: AsyncScheduler | Scheduler) {.multisync.} =
       # Add task back so it can be waited on again
       scheduler &= currTask
 
+  scheduler.running = false
   
 export times
 export cron

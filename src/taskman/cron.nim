@@ -3,6 +3,28 @@ import std/[
   macros
 ]
 
+##
+## This module implements the cron format for the scheduler.
+## Cron formats are defined either with the cron_ macro or initCron_
+runnableExamples:
+  # * * * * *
+  # Default value for each field is every val
+  # The cron macro uses x in place of *
+  assert initCron() == cron(x, x, x, x, x)
+
+  # 4 10 * * *
+  assert initCron({4.MinuteRange}, {10.HourRange}) == cron(4, 10, x, x, x)
+
+  # 4-10 4,5,6 * * sun,mon
+  assert initCron(
+    {4.MinuteRange .. 10},
+    {4.HourRange, 5, 6}, 
+    weekDays = {dSun, dMon}
+  ) == cron(4 - 10, {4, 5, 6}, weekDays = {dSun, dMon})
+
+  # every second minute
+  assert initCron(everyMinute / 2) == cron(minutes = x / 2)
+
 
 type
   CronRanges = MinuteRange or HourRange or MonthDayRange or Month or WeekDay
@@ -22,8 +44,6 @@ type
 const maxYears* {.intdefine.} = 3 # Max years to search ahead to find valid cron time
 
 const 
-  defaultTaskName* {.strdefine.} = "task"
-    ## Default name for a task. Will be shown in error messages
   everyMinute* = {0.MinuteRange .. 59}
     ## Use with cron task to run every minute
   everyHour* = {0.HourRange .. 23}
