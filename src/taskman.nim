@@ -1,10 +1,16 @@
-import asyncdispatch
+import std/asyncdispatch
+export asyncdispatch
+  
 import std/[
   times,
   heapqueue,
   os,
+  macros
 ]
 
+import taskman/cron
+
+# Only force tasks to be gcsafe when threads are on
 when compileOption("threads"):
   {.pragma: threadsafe, gcsafe.}
 else:
@@ -13,57 +19,158 @@ else:
 ##
 ## This package can be used for simple tasks that need to run on an interval or at a certain time.
 ##
+## It has both an async and non-async api (They are similar, only difference being in creation of scheduler)
+##
+## Making tasks
+## ============
+##
+## The main procs for creating tasks are 
+##
+## * every_ When you want a task to run on an interval (First run is when start() is called)
+## * at_ When you want the task to run once at a certain date (Runs once)
+## * wait_ When you want to wait a certain amount of time and then run the task (Runs once)
+##
+
+runnableExamples "-r:off":
+  let tasks = newAsyncScheduler() # or newScheduler if you don't want to use async
+
+  tasks.every(5.minutes) do () {.async.}:
+    echo "This will run every 5 minutes"
+
+  tasks.at("2077-01-1".parse("yyyy-mm-dd")) do () {.async.}:
+    echo "This will run on the 1st of janurary in 2077"
+
+  tasks.wait(10.hours) do () {.async.}:
+    echo "This will run after 10 hours"
+
+  # Block the thread and run tasks when needed
+  # asyncCheck could be used instead e.g. so you can have a web server running also
+  # You could also put it onto another thread
+  waitFor tasks.start()
+
+## Deleting Tasks
+## ==============
+##
+## Tasks can be directly removed using del_
+
+runnableExamples:
+  let 
+    tasks = newScheduler()
+    taskA = newTask[TaskHandler](5.seconds, proc () = echo "hello")
+
+  tasks &= taskA
+  tasks.every(1.days, (proc () = echo "A new dawn appears"), name = "newDay")
+  assert tasks.len == 2
+
+  # Tasks can be deleted either with their name or using the original task obj
+  tasks.del taskA
+  tasks.del "newDay"
+  assert tasks.len == 0
+
+## If inside a task, then removeTask_ can be used to remove the current task (This is just a helper to raise RemoveTaskException_).
+## onlyRun_ is another helper which calls removeTask_ after a task has run a certain number of times
+runnableExamples:
+  let tasks = newScheduler()
+
+  tasks.every(1.milliseconds) do ():
+    if true:
+      echo "I don't want to run anymore"
+      removeTask() #
+
+  tasks.every(1.milliseconds) do ():
+    if not false:
+      raise (ref RemoveTaskException)()
+
+  var i = 1
+  tasks.every(1.nanoseconds) do ():
+    onlyRun(3)
+    # This task will only run three times (Terminates at the end of the 3 run)
+    echo i
+    inc i
+
+  assert tasks.len == 3
+  tasks.start() # Tasks will be deleted when ran in this scenario
+  assert tasks.len == 0
+
+## Cron
+## ====
+##
+## For more advanced intervals you can instead use cron timers
+##
+runnableExamples:
+  let tasks = newScheduler()
+
+  # Just like * * * * *
+  tasks.every(cron(x, x, x, x, x)) do ():
+    echo "Minute has passed"
+
+  tasks.every(cron(5, 10, x, x, x)) do ():
+    echo "It is the 5th minute of the 10th hour"
+
+## See the `cron module <taskman/cron.html>`_ for more info on the syntax
 
 type
-    TaskBase*[T: HandlerTypes] = ref object
-      ## * **handler**: The proc that handles the task being called
-      ## * **startTime**: The time that the task should be called
-      ## * **name**: The name of the task, useful for debugging with error messages (default is defaultTaskName_)
-      ## * **oneShot**: Whether the task only runs once (true) or runs continuiously (false)
-      handler*: T
-      startTime*: Time
-      name*: string
-      case oneShot*: bool # Whether the task runs repeatedly or only once
-      of false:
-        interval*: TimeInterval
-      of true: discard
+  TimerKind = enum
+    Interval
+    OneShot
+    Cron
+    
+  TaskBase*[T: HandlerTypes] = ref object
+    ## * **handler**: The proc that handles the task being called
+    ## * **startTime**: The time that the task should be called
+    ## * **name**: The name of the task, useful for debugging with error messages (default is defaultTaskName_)
+    ## * **oneShot**: Whether the task only runs once (true) or runs continuiously (false)
+    handler*: T
+    startTime*: Time
+    name*: string
+    case kind*: TimerKind
+    of Interval:
+      interval*: TimeInterval
+    of Cron:
+      cronFormat*: Cron
+    of OneShot: discard # only fires for startTime
         
-    AsyncTaskHandler* = proc (): Future[void] {.threadsafe.}
-      ## Proc that runs in an async scheduler
-      ##
-      ## .. Note::When using `--threads:on` the proc must be gcsafe
+  AsyncTaskHandler* = proc (): Future[void] {.threadsafe.}
+    ## Proc that runs in an async scheduler
+    ##
+    ## .. Note::When using `--threads:on` the proc must be gcsafe
 
-    TaskHandler* = proc () {.threadsafe.}
-      ## Proc that runs in a normal scheduler
-      ##
-      ## .. Note::When using `--threads:on` the proc must be gcsafe
+  TaskHandler* = proc () {.threadsafe.}
+    ## Proc that runs in a normal scheduler
+    ##
+    ## .. Note::When using `--threads:on` the proc must be gcsafe
 
 
-    ErrorHandler*[T] = proc (s: SchedulerBase[T], task: TaskBase[T], exception: ref Exception) {.threadsafe.}
-      ## The error handler will be called when a task raises an exception.
-      ## Can be used to do things like reschedule a proc to be called earlier or to just ignore errors
+  ErrorHandler*[T] = proc (s: SchedulerBase[T], task: TaskBase[T], exception: ref Exception) {.threadsafe.}
+    ## The error handler will be called when a task raises an exception.
+    ## Can be used to do things like reschedule a proc to be called earlier or to just ignore errors
 
-    HandlerTypes* = AsyncTaskHandler | TaskHandler
+  HandlerTypes* = AsyncTaskHandler | TaskHandler
 
-    SchedulerBase*[T: HandlerTypes] = ref object
-      tasks*: HeapQueue[TaskBase[T]]
-      errorHandler*: ErrorHandler[T]
+  SchedulerBase*[T: HandlerTypes] = ref object
+    tasks*: HeapQueue[TaskBase[T]]
+    running*: bool
+    errorHandler*: ErrorHandler[T]
 
-    Scheduler* = SchedulerBase[TaskHandler]
-    AsyncScheduler* = SchedulerBase[AsyncTaskHandler]
+  Scheduler* = SchedulerBase[TaskHandler]
+  AsyncScheduler* = SchedulerBase[AsyncTaskHandler]
 
-    Task* = TaskBase[TaskHandler]
-    AsyncTask* = TaskBase[AsyncTaskHandler]
+  Task* = TaskBase[TaskHandler]
+  AsyncTask* = TaskBase[AsyncTaskHandler]
 
-    RemoveTaskException* = CatchableError
+  RemoveTaskException* = object of CatchableError
+    ## Throw this within a task to remove it from the scheduler
+
+  InfiniteCronTask* = object of CatchableError
+    ## Gets thrown when a cron task keeps looping
+    # TODO: remove, this shouldn't happen ever
+
 
 const defaultTaskName* {.strdefine.} = "task"
-  ## Default name for a task
+  ## Default name for a task. Will be shown in error messages
 
-proc `<`[T: HandlerTypes](a, b: TaskBase[T]): bool {.inline.} = a.startTime < b.startTime
-
-proc `==`[T: HandlerTypes](a, b: TaskBase[T]): bool {.inline.} =
-  a.handler == b.handler
+func `<`(a, b: TaskBase[HandlerTypes]): bool {.inline.} = a.startTime < b.startTime
+func `==`(a, b: TaskBase[HandlerTypes]): bool {.inline.} = a.handler == b.handler
 
 proc defaultErrorHandler[T: HandlerTypes](tasks: SchedulerBase[T], task: TaskBase[T],  exception: ref Exception) =
   ## Default error handler, just raises the error further up the stack
@@ -87,7 +194,7 @@ proc newScheduler*(errorHandler: ErrorHandler[TaskHandler] = defaultErrorHandler
       # and used in multiple schedulers and also be gcsafe
       echo exception.msg
       task.startTime = getTime() + 5.seconds
-
+  #==#
   newSchedulerBase[TaskHandler](errorHandler)
   
 proc newAsyncScheduler*(errorHandler: ErrorHandler[AsyncTaskHandler] = defaultErrorHandler[AsyncTaskHandler]): AsyncScheduler =
@@ -95,7 +202,7 @@ proc newAsyncScheduler*(errorHandler: ErrorHandler[AsyncTaskHandler] = defaultEr
   ## See newScheduler_ for more details
   newSchedulerBase[AsyncTaskHandler](errorHandler)
 
-proc len*[T: HandlerTypes](scheduler: SchedulerBase[T]): int {.inline.} =
+proc len*(scheduler: SchedulerBase[HandlerTypes]): int {.inline.} =
   ## Returns number of tasks in the scheduler
   scheduler.tasks.len
 
@@ -103,10 +210,10 @@ proc newTask*[T: HandlerTypes](interval: TimeInterval, handler: T, name = defaul
   ## Creates a new task which can be added to a scheduler.
   ## This task will run every `interval`
   TaskBase[T](
+      kind: Interval,
       handler: handler,
       interval: interval,
       startTime: getTime(),
-      oneShot: false,
       name: name
   )
 
@@ -114,9 +221,19 @@ proc newTask*[T: HandlerTypes](time: DateTime, handler: T, name = defaultTaskNam
   ## Creates a new task which can be added to a scheduler.
   ## This task will only run once (will run at **time**)
   TaskBase[T](
+    kind: OneShot,
     handler: handler,
     startTime: time.toTime(),
-    oneshot: true,
+    name: name
+  )
+
+proc newTask*[T: HandlerTypes](cron: Cron, handler: T, name = defaultTaskName): TaskBase[T] =
+  ## Creates a new task which can be added to a scheduler.
+  TaskBase[T](
+    kind: Cron,
+    handler: handler,
+    startTime: now().next(cron).toTime(),
+    cronFormat: cron,
     name: name
   )
 
@@ -134,9 +251,19 @@ proc every*[T: HandlerTypes](scheduler: SchedulerBase[T]; interval: TimeInterval
 
     tasks.every(2.hours) do () {.async.}:
       echo "2 hours has passed, see you again in 2 hours"
-
+  #==#
   scheduler &= newTask(interval, handler, name)
 
+proc every*[T: HandlerTypes](scheduler: SchedulerBase[T], cron: Cron, handler: T, name = defaultTaskName) =
+  ## Runs a task every time a cron timer is valid
+  runnableExamples:
+    let tasks = newAsyncScheduler()
+
+    tasks.every(cron(x, x, x, x, x)) do () {.async.}:
+      echo "A minute has passed"
+  #==#
+  scheduler &= newTask(cron, handler, name)
+  
 proc at*[T: HandlerTypes](scheduler: SchedulerBase[T], time: DateTime, handler: T, name = defaultTaskName) =
   ## Runs a task at a certain date/time (only runs once).
   runnableExamples:
@@ -144,7 +271,7 @@ proc at*[T: HandlerTypes](scheduler: SchedulerBase[T], time: DateTime, handler: 
 
     tasks.at("2077-03-06".parse("yyyy-MM-dd")) do () {.async.}:
       echo "The date is now 2077-03-06"
-
+  #==#
   scheduler &= newTask(time, handler, name)
 
 proc wait*[T: HandlerTypes](scheduler: SchedulerBase[T], interval: TimeInterval, handler: T, name = defaultTaskName) =
@@ -156,10 +283,10 @@ proc wait*[T: HandlerTypes](scheduler: SchedulerBase[T], interval: TimeInterval,
     # I need to send message reminder in a few minutes
     tasks.wait(5.minutes) do () {.async.}:
       asyncCheck client.post("http://notificationurl.com", "Your reminder message")
-
+  #==#
   scheduler.at(now() + interval, handler, name)
 
-proc milliSecondsLeft[T: HandlerTypes](task: TaskBase[T]): int =
+proc milliSecondsLeft(task: TaskBase[HandlerTypes]): int =
   ## Returns time different in milliseconds between now and the tasks start time
   result = int((task.startTime - getTime()).inMilliseconds)
 
@@ -177,11 +304,11 @@ proc del*[T: HandlerTypes](scheduler: SchedulerBase[T], task: TaskBase[T]) =
     # Then the task can be deleted anytime later
     tasks.del task
     doAssert tasks.len == 0
-
+  #==#
   let index = scheduler.tasks.find task
   scheduler.tasks.del index
 
-proc del*[T: HandlerTypes](scheduler: SchedulerBase[T], task: string) =
+proc del*(scheduler: SchedulerBase[HandlerTypes], task: string) =
   ## Removes a task from the scheduler (via its name).
   ## If there are multiple tasks with the same name then the first task is deleted
   runnableExamples:
@@ -191,7 +318,7 @@ proc del*[T: HandlerTypes](scheduler: SchedulerBase[T], task: string) =
     tasks.every(5.minutes, handler, name = "time pass")
     tasks.del "time pass"
     doAssert tasks.len == 0
-
+  #==#
   for i in 0..<scheduler.len:
     if scheduler.tasks[i].name == task:
       scheduler.tasks.del i
@@ -209,8 +336,18 @@ proc removeTask*() =
       else:
         # Do important stuff
         inc i
-
+  #==#
   raise newException(RemoveTaskException, "")
+
+proc next*(task: TaskBase): Time {.raises: [TooFarAheadCron].} =
+  ## Returns the next date that a task will run at (If it ran now).
+  ## If the task is a oneShot then it just returns its start time
+  case task.kind
+  of OneShot: discard
+  of Interval:
+    result = getTime() + task.interval
+  of Cron:
+    result = now().next(task.cronFormat).toTime()
 
 template onlyRun*(times: int) =
   ## Make task only run a certain number of times
@@ -219,7 +356,7 @@ template onlyRun*(times: int) =
     tasks.every(5.seconds) do ():
       onlyRun(5) # This is like the example in removeTask
 
-  var timesRan {.global.} = 0
+  var timesRan {.global.} = 1
   defer:
     if timesRan == times:
       removeTask()
@@ -230,6 +367,7 @@ proc start*(scheduler: AsyncScheduler | Scheduler) {.multisync.} =
   ## Starts running the tasks.
   ## Call with `asyncCheck` to make it run in the background
   const isAsync = scheduler is AsyncScheduler
+  scheduler.running = true
   while scheduler.len > 0:
     when isAsync: # Check if in async
       await sleepAsync scheduler.tasks[0].milliSecondsLeft
@@ -237,11 +375,10 @@ proc start*(scheduler: AsyncScheduler | Scheduler) {.multisync.} =
       sleep scheduler.tasks[0].milliSecondsLeft
     var currTask = scheduler.tasks.pop()
     if getTime() >= currTask.startTime:
-      if not currTask.oneShot:
+      if currTask.kind != OneShot:
         # Schedule task again
-        currTask.startTime = getTime() + currTask.interval
+        currTask.startTime = currTask.next()
         scheduler &= currTask
-
       try:
         await currTask.handler()
       except RemoveTaskException:
@@ -253,16 +390,7 @@ proc start*(scheduler: AsyncScheduler | Scheduler) {.multisync.} =
       # Add task back so it can be waited on again
       scheduler &= currTask
 
-
-when isMainModule:
-  let tasks = newAsyncScheduler()
-
-  let now = now()
-  tasks.every(1.seconds) do () {.async.}:
-    echo "Hello"
-    echo (now() - now).inSeconds
-
-  waitFor tasks.start()
-
+  scheduler.running = false
+  
 export times
-export asyncdispatch
+export cron
