@@ -11,8 +11,8 @@ Supports
 Go to the [docs here](https://tempdocs.netlify.app/taskman/stable) for more information and examples
 
 ### Installation
-Either run `nimble install https://github.com/ire4ever1190/taskman`
-or add `requires "https://github.com/ire4ever1190/taskman"` to your .nimble file
+Either run `nimble install taskman`
+or add `requires "taskman"` to your .nimble file
 
 ### Examples
 
