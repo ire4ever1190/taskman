@@ -161,10 +161,6 @@ type
   RemoveTaskException* = object of CatchableError
     ## Throw this within a task to remove it from the scheduler
 
-  InfiniteCronTask* = object of CatchableError
-    ## Gets thrown when a cron task keeps looping
-    # TODO: remove, this shouldn't happen ever
-
 
 const defaultTaskName* {.strdefine.} = "task"
   ## Default name for a task. Will be shown in error messages

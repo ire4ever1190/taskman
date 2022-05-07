@@ -6,7 +6,9 @@ test "Range counting":
   check everyWeekDay / 2 == {dMon, dWed, dFri, dSun} 
   check everyMonth / 1 == everyMonth
 
-
+test "Invalid cron format":
+  expect AssertionDefect:
+    discard initCron({}, {}, {}, {}, {})
 
 suite "Cron macro":
   test "* * * * *":

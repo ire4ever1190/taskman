@@ -1,6 +1,7 @@
 import std/[
   times,
-  macros
+  macros,
+  sequtils
 ]
 
 ##
@@ -25,6 +26,13 @@ runnableExamples:
   # every second minute
   assert initCron(everyMinute / 2) == cron(minutes = x / 2)
 
+## This implements cron in a slightly non standard way in that both `monthDays` and `weekDays` are checked e.g.
+runnableExamples:
+  let 
+    start = dateTime(2000, mJan, 1)
+    form  = cron(x, x, 10, x, dSun)
+  # In normal cron it would match 2000-01-10 (Which is a monday)
+  assert start.next(form) == dateTime(2000, mSep, 10)
 
 type
   CronRanges = MinuteRange or HourRange or MonthDayRange or Month or WeekDay
@@ -87,38 +95,40 @@ func matches(date: DateTime, format: Cron): bool {.raises: [].}=
   date.month in format.months and 
   date.weekday in format.weekDays
 
+func isValid*(format: Cron): bool {.raises: [].} =
+  ## Checks that a format is valid (Just checks it has no empty sets).
+  runnableExamples:
+    assert not Cron(minutes: {}).isValid
+  #==#
+  result = true
+  for field in format.fields():
+    if field.len == 0:
+      return false
+
 func monthDays(d: DateTime): set[MonthDayRange] {.raises: [].} =
   ## Get range of month days for current month of date
   {1.MonthDayRange .. d.month.getDaysInMonth(d.year)}
 
 func possibleDays(allowedDays: set[WeekDay], date: DateTime): set[MonthDayRange] {.raises: [].}=
+  ## Returns all days in month that are in allowed days
   for monthDay in date.monthDays:
     let day = monthDay.getDayOfWeek(date.month, date.year)
     if day in allowedDays:
       result.incl monthDay  
 
-func `/`*[T: CronRanges](a: set[T], inc: int): set[T] {.raises: [].} =
-  ## Returns a range of values that count up by inc
+func `/`*[T: CronRanges](values: set[T], n: int): set[T] {.raises: [].} =
+  ## Returns every nth value starting from the first value in values
   runnableExamples:
     # Set of values to run every second day
     assert everyWeekDay / 2 == {dMon, dWed, dFri, dSun} 
     # Only use every third hour in our range
     assert {5.HourRange .. 15} / 4 == {5.HourRange, 9, 13}
-
-  var curr = a.min
-    # Highest value that is currently in the set, don't go past it
-  let max = a.max.ord
-
-  while curr <= max:
-    if T(curr) in a:
-      result.incl T(curr)
-    let next = curr.int + inc
-    # Check if the next value is valid in the full range
-    if next >= T.low.int and next <= T.high.int:
-      curr = curr.int + inc
-    else:
-      break
-
+    # It only does every second value
+    assert {dMon, dWed, dSun} / 2 == {dMon, dSun}
+  #==#
+  let possibleValues = toSeq(values)
+  for i in countup(0, possibleValues.len - 1, n):
+    result.incl possibleValues[i]
 
 func incField[T: CronRanges](s: set[T], curr: T): int {.raises: [].} =
   ## Returns the value needed to increment a field to the next value.
@@ -132,12 +142,8 @@ proc next*(now: DateTime, format: Cron): DateTime {.raises: [TooFarAheadCron].} 
   ## Returns next date that a cron would run from now
   # Implementation from here
   # https://github.com/robfig/cron/blob/master/spec.go#L58
-  # Idea is to 
-  # * Go through each field from largest (month) to smallest (minute)
-  #   and If the field doesnt match the format then reset the other fields to zero (only if not zeroed before) and increment to next
-  #   valid value
-  # * Continiously do this until the format matches
-
+  assert format.isValid, $format & " is not a valid format"
+  
   var zerod = false
   let maxYear = now.year + maxYears
   result = now
@@ -192,19 +198,21 @@ proc next*(now: DateTime, format: Cron): DateTime {.raises: [TooFarAheadCron].} 
 func initCron*(minutes = everyMinute, hours = everyHour, 
                monthDays = everyMonthDay, months = everyMonth, 
                weekDays = everyWeekDay): Cron {.raises: [].} =
-  ## Makes a new cron timer
+  ## Makes a new cron format.
+  ## Sets passed in cannot be empty (Since that wouldn't make sense)
   runnableExamples:
-    let everySecondSecond = initCron(minutes = {0.MinuteRange})
+    let everySecondMinute = initCron(minutes = everyMinute / 2)
+    let weekendMornings = initCron(hours = {8.HourRange}, weekDays = {dSat, dSun})
+  #==#
   template res(field: untyped) =
     ## Updates field in result with parameter of same name 
-    doAssert field.len > 0, "Can't have no valid values in set"
     result.field = field
   res minutes
   res hours
   res monthDays
   res months
   res weekDays
-
+  assert result.isValid, "Cron format isn't valid"
 
 proc translateCronNode(nodes: NimNode, every: NimNode): NimNode =
   ## Translates the DSL into actual NimNode
