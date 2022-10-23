@@ -1,8 +1,8 @@
 # Package
 
-version       = "0.5.0"
+version       = "0.5.1"
 author        = "Jake Leahy"
-description   = "A package that manages background async tasks"
+description   = "A package that manages background tasks on a schedule"
 license       = "MIT"
 srcDir        = "src"
 

@@ -297,7 +297,7 @@ proc at*[T: HandlerTypes](scheduler: SchedulerBase[T], time: DateTime, handler: 
 
 proc wait*[T: HandlerTypes](scheduler: SchedulerBase[T], interval: TimeInterval, handler: T, name = defaultTaskName) =
   ## Waits `interval` amount of time and then runs task (only runs once).
-  runnableExamples:
+  runnableExamples "--threads:off":
     import std/httpclient
     let tasks = newAsyncScheduler()
     let client = newAsyncHttpClient()
