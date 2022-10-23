@@ -48,6 +48,26 @@ runnableExamples "-r:off":
   # You could also put it onto another thread
   waitFor tasks.start()
 
+## By default the scheduler will end when all tasks are finished (i.e. every `at` and `wait` task has completed). It also will run tasks late if
+## they are added while the scheduler is sleeping while waiting for a tasks start time. To change this behaviour you can add a `periodicCheck` parameter
+## to the start function which will make the scheduler check every `periodicCheck` seconds for which task it should be waiting on
+
+runnableExamples "-r:off":
+  let tasks = newAsyncScheduler()
+
+  proc main() {.async.} =
+    tasks.every(10.minutes) do () {.async.}:
+      echo "10 minutes has passed"
+    asyncCheck tasks.start(100) # The scheduler will check every 100 milliseconds for new tasks
+
+    # If we didn't have the periodicCheck passed before then this task would only run after
+    # the 10 minutes task before has ran
+    tasks.wait(5.seconds) do () {.async.}:
+      echo "5 seconds has passed"
+
+  waitFor main()
+
+
 ## Deleting Tasks
 ## ==============
 ##
@@ -91,6 +111,7 @@ runnableExamples:
   assert tasks.len == 3
   tasks.start() # Tasks will be deleted when ran in this scenario
   assert tasks.len == 0
+
 
 ## Cron
 ## ====
@@ -149,7 +170,7 @@ type
 
   SchedulerBase*[T: HandlerTypes] = ref object
     tasks*: HeapQueue[TaskBase[T]]
-    running*: bool
+    running: bool
     errorHandler*: ErrorHandler[T]
 
   Scheduler* = SchedulerBase[TaskHandler]
@@ -164,6 +185,10 @@ type
 
 const defaultTaskName* {.strdefine.} = "task"
   ## Default name for a task. Will be shown in error messages
+
+func running*(tasks: SchedulerBase): bool {.inline.} =
+  ## Returns true if the scheduler is running
+  tasks.running
 
 func `<`(a, b: TaskBase[HandlerTypes]): bool {.inline.} = a.startTime < b.startTime
 func `==`(a, b: TaskBase[HandlerTypes]): bool {.inline.} = a.handler == b.handler
@@ -198,7 +223,7 @@ proc newAsyncScheduler*(errorHandler: ErrorHandler[AsyncTaskHandler] = defaultEr
   ## See newScheduler_ for more details
   newSchedulerBase[AsyncTaskHandler](errorHandler)
 
-proc len*(scheduler: SchedulerBase[HandlerTypes]): int {.inline.} =
+proc len*(scheduler: SchedulerBase): int {.inline.} =
   ## Returns number of tasks in the scheduler
   scheduler.tasks.len
 
@@ -359,32 +384,37 @@ template onlyRun*(times: int) =
     else:
       inc timesRan
 
-proc start*(scheduler: AsyncScheduler | Scheduler) {.multisync.} =
+proc start*(scheduler: AsyncScheduler | Scheduler, periodicCheck = 0) {.multisync.} =
   ## Starts running the tasks.
   ## Call with `asyncCheck` to make it run in the background
+  ##
+  ## * **periodicCheck**: Number of milliseoconds to periodically check for new tasks. Only use this if tasks are added while the scheduler is running (This also prevents the scheduler from ever stopping)
   const isAsync = scheduler is AsyncScheduler
   scheduler.running = true
-  while scheduler.len > 0:
+  while scheduler.len > 0 or periodicCheck > 0:
+    let sleepTime = if periodicCheck != 0: periodicCheck
+                    else: scheduler.tasks[0].milliSecondsLeft
     when isAsync: # Check if in async
-      await sleepAsync scheduler.tasks[0].milliSecondsLeft
+      await sleepAsync sleepTime
     else:
-      sleep scheduler.tasks[0].milliSecondsLeft
-    var currTask = scheduler.tasks.pop()
-    if getTime() >= currTask.startTime:
-      if currTask.kind != OneShot:
-        # Schedule task again
-        currTask.startTime = currTask.next()
+      sleep sleepTime
+    if scheduler.len > 0:
+      var currTask = scheduler.tasks.pop()
+      if getTime() >= currTask.startTime:
+        if currTask.kind != OneShot:
+          # Schedule task again
+          currTask.startTime = currTask.next()
+          scheduler &= currTask
+        try:
+          await currTask.handler()
+        except RemoveTaskException:
+          scheduler.del currTask
+        except Exception as e:
+          e.msg = "Error with task '" & currTask.name & "': " & e.msg
+          scheduler.errorHandler(scheduler, currTask, e)
+      else:
+        # Add task back so it can be waited on again
         scheduler &= currTask
-      try:
-        await currTask.handler()
-      except RemoveTaskException:
-        scheduler.del currTask
-      except Exception as e:
-        e.msg = "Error with task '" & currTask.name & "': " & e.msg
-        scheduler.errorHandler(scheduler, currTask, e)
-    else:
-      # Add task back so it can be waited on again
-      scheduler &= currTask
 
   scheduler.running = false
   

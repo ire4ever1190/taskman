@@ -215,7 +215,7 @@ func initCron*(minutes = everyMinute, hours = everyHour,
   assert result.isValid, "Cron format isn't valid"
 
 proc translateCronNode(nodes: NimNode, every: NimNode): NimNode =
-  ## Translates the DSL into actual NimNode
+  ## Translates the DSL into actual nim code
   let rangeType = every.getTypeImpl[1]
   
   case nodes.kind:
