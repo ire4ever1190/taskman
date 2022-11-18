@@ -5,7 +5,8 @@ import std/[
   times,
   heapqueue,
   os,
-  macros
+  macros,
+  monotimes
 ]
 
 import taskman/cron
@@ -172,6 +173,8 @@ type
     tasks*: HeapQueue[TaskBase[T]]
     running: bool
     errorHandler*: ErrorHandler[T]
+    when T is AsyncTaskHandler:
+      timer: tuple[finishAt: MonoTime, fut: Future[void]]
 
   Scheduler* = SchedulerBase[TaskHandler]
   AsyncScheduler* = SchedulerBase[AsyncTaskHandler]
@@ -189,6 +192,23 @@ const defaultTaskName* {.strdefine.} = "task"
 func running*(tasks: SchedulerBase): bool {.inline.} =
   ## Returns true if the scheduler is running
   tasks.running
+
+proc wakeUp[T](tasks: SchedulerBase[T]) =
+  ## Wakes up the scheduler so that it can check if it is still sleeping on
+  ## the earliest task. Only does stuff if async scheduler, noop if not
+  when T is AsyncTaskHandler:
+    if tasks.timer.fut == nil:
+      # We aren't sleeping
+      return
+    let p = getGlobalDispatcher()
+    # First delete it from the dispatcher so it won't try and complete the future again
+    p.timers.del(p.timers.find(tasks.timer)) # Should never be -1
+    # Complete the sleep
+    tasks.timer.fut.complete()
+    # Disarm the timer
+    tasks.timer.fut = nil
+  else:
+    discard
 
 func `<`(a, b: TaskBase[HandlerTypes]): bool {.inline.} = a.startTime < b.startTime
 func `==`(a, b: TaskBase[HandlerTypes]): bool {.inline.} = a.handler == b.handler
@@ -261,6 +281,7 @@ proc newTask*[T: HandlerTypes](cron: Cron, handler: T, name = defaultTaskName): 
 proc add*[T: HandlerTypes](scheduler: SchedulerBase[T], task: TaskBase[T]) {.inline.} =
   ## Adds a task to the scheduler.
   scheduler.tasks.push task
+  scheduler.wakeUp()
 
 proc every*[T: HandlerTypes](scheduler: SchedulerBase[T]; interval: TimeInterval, handler: T, name = defaultTaskName) =
   ## Runs a task every time the interval occurs.
@@ -388,16 +409,34 @@ proc start*(scheduler: AsyncScheduler | Scheduler, periodicCheck = 0) {.multisyn
   ## Starts running the tasks.
   ## Call with `asyncCheck` to make it run in the background
   ##
-  ## * **periodicCheck**: Number of milliseoconds to periodically check for new tasks. Only use this if tasks are added while the scheduler is running (This also prevents the scheduler from ever stopping)
+  ## * **periodicCheck**: This prevents the scheduler from fulling stopping and specifies how many milliseconds to poll for new tasks. Also use this with non async scheduler to allow you to add new tasks in that might be shorter than current running one
   const isAsync = scheduler is AsyncScheduler
   scheduler.running = true
   while scheduler.len > 0 or periodicCheck > 0:
-    let sleepTime = if periodicCheck != 0: periodicCheck
-                    else: scheduler.tasks[0].milliSecondsLeft
-    when isAsync: # Check if in async
-      await sleepAsync sleepTime
+    if scheduler.len == 0:
+      when isAsync:
+        await sleepAsync(periodicCheck)
+      else:
+        sleep periodicCheck
+      continue # Run loop again to check if stuff has been added while sleeping
+
+    let sleepTime = scheduler.tasks[0].milliSecondsLeft
+    when isAsync:
+      # This is more or less copy and pasted from async dispatch.
+      # But we make a few modifications so that we can effectively cancel the sleeping.
+      # This enables us to force the scheduler to check for new tasks when they get added (Instead of needing to poll with periodicCheck)
+      var retFuture = newFuture[void]("start")
+      let
+        p = getGlobalDispatcher()
+      scheduler.timer = (getMonoTime() + initDuration(milliseconds = sleepTime), retFuture)
+      p.timers.push(scheduler.timer)
+      await retFuture
     else:
-      sleep sleepTime
+      # We can't do any fancy sleep cancelling so we need to do this
+      if periodicCheck == 0:
+        sleep sleepTime
+      else:
+        sleep periodicCheck
     if scheduler.len > 0:
       var currTask = scheduler.tasks.pop()
       if getTime() >= currTask.startTime:

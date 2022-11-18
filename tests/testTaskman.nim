@@ -66,11 +66,11 @@ test "Inserting tasks while running works":
       start = now()
     var finish: DateTime
     tasks.wait(5.seconds) do () {.async.}: discard
-    asyncCheck tasks.start(5)
+    asyncCheck tasks.start()
     await sleepAsync(1000)
     tasks.wait(1.seconds) do () {.async.}: finish = now()
     
-    await sleepAsync(1100)
+    await sleepAsync(5000)
     # Check that it only took 2 seconds (1 second sleep, 1 second wait task)
     let diff = (finish - start).inMilliseconds - 2000
     check diff in -10..10
