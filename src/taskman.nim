@@ -150,7 +150,7 @@ type
       interval*: TimeInterval
     of Cron:
       cronFormat*: Cron
-    of OneShot: discard # only fires for startTime
+    of OneShot: discard
         
   AsyncTaskHandler* = proc (): Future[void] {.threadsafe.}
     ## Proc that runs in an async scheduler
@@ -296,6 +296,7 @@ proc every*[T: HandlerTypes](scheduler: SchedulerBase[T]; interval: TimeInterval
   #==#
   scheduler &= newTask(interval, handler, name)
 
+
 proc every*[T: HandlerTypes](scheduler: SchedulerBase[T], cron: Cron, handler: T, name = defaultTaskName) =
   ## Runs a task every time a cron timer is valid
   runnableExamples:
@@ -305,6 +306,10 @@ proc every*[T: HandlerTypes](scheduler: SchedulerBase[T], cron: Cron, handler: T
       echo "A minute has passed"
   #==#
   scheduler &= newTask(cron, handler, name)
+
+proc every*[T: HandlerTypes](scheduler: SchedulerBase[T], often: TimeInterval | Cron, name: string, handler: T) =
+  ## Sugar that allows you to have name and lambda 
+  scheduler.every(often, handler, name)
   
 proc at*[T: HandlerTypes](scheduler: SchedulerBase[T], time: DateTime, handler: T, name = defaultTaskName) =
   ## Runs a task at a certain date/time (only runs once).
@@ -315,6 +320,10 @@ proc at*[T: HandlerTypes](scheduler: SchedulerBase[T], time: DateTime, handler: 
       echo "The date is now 2077-03-06"
   #==#
   scheduler &= newTask(time, handler, name)
+
+proc at*[T: HandlerTypes](scheduler: SchedulerBase[T], interval: TimeInterval, name: string, handler: T) =
+  ## Sugar that allows you to have name and lambda
+  scheduler.at(interval, handler, name)
 
 proc wait*[T: HandlerTypes](scheduler: SchedulerBase[T], interval: TimeInterval, handler: T, name = defaultTaskName) =
   ## Waits `interval` amount of time and then runs task (only runs once).
@@ -327,6 +336,10 @@ proc wait*[T: HandlerTypes](scheduler: SchedulerBase[T], interval: TimeInterval,
       asyncCheck client.post("http://notificationurl.com", "Your reminder message")
   #==#
   scheduler.at(now() + interval, handler, name)
+
+proc wait*[T: HandlerTypes](scheduler: SchedulerBase[T], interval: TimeInterval, name: string, handler: T) =
+  ## Sugar that allows you to have name and lambda
+  scheduler.wait(interval, handler, name)
 
 proc milliSecondsLeft(task: TaskBase[HandlerTypes]): int =
   ## Returns time different in milliseconds between now and the tasks start time
