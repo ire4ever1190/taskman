@@ -25,12 +25,12 @@ let tasks = newAsyncScheduler()
 var ip = ""
 
 tasks.every(1.days) do () {.async.}:
-	let client = newAsyncHttpClient()
-	ip = client
+  let client = newAsyncHttpClient()
+  defer: client.close()
+  ip = client
     .getContent("https://httpbin.org/ip")
     .parseJson()["origin"]
     .getStr()
-  client.close()
 
 waitFor tasks.start()
 ```
@@ -53,9 +53,6 @@ proc cb(req: Request) {.async, gcsafe.} =
     tasks.wait(5.minutes) do () {.async.}:
       # Once the wait is over, allow them in
       allowed.incl req.hostname
-    if not tasks.running:
-      # We might need to restart the scheduler if we ran out of tasks
-      asyncCheck tasks.start()
     await req.respond(Http200, "You can join in 5 minutes")
   else:
     await req.respond(Http200, "Hello again!")
