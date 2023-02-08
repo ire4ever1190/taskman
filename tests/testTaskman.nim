@@ -57,7 +57,7 @@ test "Error handler can reschedule":
   checkTakes 5:
     tasks.every(5.minutes) do ():
       onlyRun 2
-      raise (ref Exception)(msg: "Working")
+      raise (ref CatchableError)(msg: "Working")
 
 test "Inserting tasks while running works":
   proc main() {.async.} =
@@ -85,6 +85,20 @@ test "Scheduler won't break when ran out of tasks with check":
     await sleepAsync(100)
 
   waitFor main()
+
+test "Test issue with timer not being found":
+  # If this runs with no errors then its fine
+  proc main() {.async.} =
+    let tasks = newAsyncScheduler()
+    
+    tasks.every(1.seconds) do () {.async.}:
+      discard
+      
+    tasks.every(2.hours) do () {.async.}:
+      discard
+    asyncCheck tasks.start()
+    await sleepAsync 100
+  waitFor main()  
 
 when defined(testCron): 
   # Since it takes minimum 1 for a cron task to run we will put it behind a flag

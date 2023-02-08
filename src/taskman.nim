@@ -202,11 +202,13 @@ proc wakeUp[T](tasks: SchedulerBase[T]) =
       return
     let p = getGlobalDispatcher()
     # First delete it from the dispatcher so it won't try and complete the future again
-    p.timers.del(p.timers.find(tasks.timer)) # Should never be -1
-    # Complete the sleep
-    tasks.timer.fut.complete()
-    # Disarm the timer
-    tasks.timer.fut = nil
+    let timerIndex = p.timers.find(tasks.timer)
+    if timerIndex != -1: # If its -1 then the timer has already been completed
+      p.timers.del(timerIndex)
+      # Complete the sleep
+      tasks.timer.fut.complete()
+      # Disarm the timer
+      tasks.timer.fut = nil
   else:
     discard
 
@@ -461,7 +463,7 @@ proc start*(scheduler: AsyncScheduler | Scheduler, periodicCheck = 0) {.multisyn
           await currTask.handler()
         except RemoveTaskException:
           scheduler.del currTask
-        except Exception as e:
+        except CatchableError as e:
           e.msg = "Error with task '" & currTask.name & "': " & e.msg
           scheduler.errorHandler(scheduler, currTask, e)
       else:

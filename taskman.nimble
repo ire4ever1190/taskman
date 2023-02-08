@@ -1,6 +1,6 @@
 # Package
 
-version       = "0.5.3"
+version       = "0.5.4"
 author        = "Jake Leahy"
 description   = "A package that manages background tasks on a schedule"
 license       = "MIT"
