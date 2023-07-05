@@ -259,7 +259,8 @@ proc translateCronNode(nodes: NimNode, every: NimNode): NimNode =
     "Invalid syntax, check docs for how to use cron macro".error(nodes)  
 
 var x: int # We need some symbol to exist for the default value
-macro cron*(minutes, hours, monthDays, months, weekDays: untyped = x): Cron =
+macro cron*(minutes: untyped = x, hours: untyped = x, monthDays: untyped = x,
+            months: untyped = x, weekDays: untyped = x): Cron =
   ## Macro to simplify creating cron formats. 
   ## Syntax is similar to cron
   ##
