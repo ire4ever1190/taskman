@@ -8,7 +8,7 @@ Supports
 - Run after an amount of time e.g. run after 10 hours
 - Run on cron format e.g. `10 4 * * *` (Run on the 10th minute of the 4th hour everyday)
 
-Go to the [docs here](https://tempdocs.netlify.app/taskman/stable) for more information and examples
+Go to the [docs here](https://ire4ever1190.github.io/taskman/taskman.html) for more information and examples
 
 ### Installation
 Either run `nimble install taskman`
