@@ -21,7 +21,7 @@ template checkTakes(seconds: int, body: untyped): untyped =
   when not declared(tasks):
     let tasks {.inject.} = newScheduler()
   body
-  let 
+  let
     start = now()
     expectedMilliseconds = seconds * 1000
 
@@ -69,12 +69,12 @@ test "Inserting tasks while running works":
     asyncCheck tasks.start()
     await sleepAsync(1000)
     tasks.wait(1.seconds) do () {.async.}: finish = now()
-    
+
     await sleepAsync(5000)
     # Check that it only took 2 seconds (1 second sleep, 1 second wait task)
     let diff = (finish - start).inMilliseconds - 2000
     check diff in -10..10
-    
+
   waitFor main()
 
 test "Scheduler won't break when ran out of tasks with check":
@@ -90,17 +90,23 @@ test "Test issue with timer not being found":
   # If this runs with no errors then its fine
   proc main() {.async.} =
     let tasks = newAsyncScheduler()
-    
+
     tasks.every(1.seconds) do () {.async.}:
       discard
-      
+
     tasks.every(2.hours) do () {.async.}:
       discard
     asyncCheck tasks.start()
     await sleepAsync 100
-  waitFor main()  
+  waitFor main()
 
-when defined(testCron): 
+test "Can use a closure":
+  let tasks = newAsyncScheduler()
+  let x = "hello"
+  tasks.every(1.seconds) do () {.async.}:
+    echo x
+
+when defined(testCron):
   # Since it takes minimum 1 for a cron task to run we will put it behind a flag
   suite "Cron":
     test "* * * * *":
@@ -109,4 +115,4 @@ when defined(testCron):
         tasks.every(cron(x, x, x, x, x)) do ():
           echo "Minute has passed"
           onlyRun(5)
-          
+
