@@ -1,6 +1,6 @@
 import std/asyncdispatch
 export asyncdispatch
-  
+
 import std/[
   times,
   heapqueue,
@@ -11,12 +11,6 @@ import std/[
 
 import taskman/cron
 
-# Only force tasks to be gcsafe when threads are on
-when compileOption("threads"):
-  {.pragma: threadsafe, gcsafe.}
-else:
-  {.pragma: threadsafe.}
-
 ##
 ## This package can be used for simple tasks that need to run on an interval or at a certain time.
 ##
@@ -25,7 +19,7 @@ else:
 ## Making tasks
 ## ============
 ##
-## The main procs for creating tasks are 
+## The main procs for creating tasks are
 ##
 ## * every_ When you want a task to run on an interval (First run is when start() is called)
 ## * at_ When you want the task to run once at a certain date (Runs once)
@@ -75,7 +69,7 @@ runnableExamples "-r:off":
 ## Tasks can be directly removed using del_
 
 runnableExamples:
-  let 
+  let
     tasks = newScheduler()
     taskA = newTask[TaskHandler](5.seconds, proc () = echo "hello")
 
@@ -136,7 +130,7 @@ type
     Interval
     OneShot
     Cron
-    
+
   TaskBase*[T: HandlerTypes] = ref object
     ## * **handler**: The proc that handles the task being called
     ## * **startTime**: The time that the task should be called
@@ -151,19 +145,19 @@ type
     of Cron:
       cronFormat*: Cron
     of OneShot: discard
-        
-  AsyncTaskHandler* = proc (): Future[void] {.threadsafe.}
+
+  AsyncTaskHandler* = proc (): Future[void]
     ## Proc that runs in an async scheduler
     ##
     ## .. Note::When using `--threads:on` the proc must be gcsafe
 
-  TaskHandler* = proc () {.threadsafe.}
+  TaskHandler* = proc ()
     ## Proc that runs in a normal scheduler
     ##
     ## .. Note::When using `--threads:on` the proc must be gcsafe
 
 
-  ErrorHandler*[T] = proc (s: SchedulerBase[T], task: TaskBase[T], exception: ref Exception) {.threadsafe.}
+  ErrorHandler*[T] = proc (s: SchedulerBase[T], task: TaskBase[T], exception: ref Exception)
     ## The error handler will be called when a task raises an exception.
     ## Can be used to do things like reschedule a proc to be called earlier or to just ignore errors
 
@@ -239,7 +233,7 @@ proc newScheduler*(errorHandler: ErrorHandler[TaskHandler] = defaultErrorHandler
       task.startTime = getTime() + 5.seconds
   #==#
   newSchedulerBase[TaskHandler](errorHandler)
-  
+
 proc newAsyncScheduler*(errorHandler: ErrorHandler[AsyncTaskHandler] = defaultErrorHandler[AsyncTaskHandler]): AsyncScheduler =
   ## Creates an async version of Scheduler_.
   ## See newScheduler_ for more details
@@ -310,9 +304,9 @@ proc every*[T: HandlerTypes](scheduler: SchedulerBase[T], cron: Cron, handler: T
   scheduler &= newTask(cron, handler, name)
 
 proc every*[T: HandlerTypes](scheduler: SchedulerBase[T], often: TimeInterval | Cron, name: string, handler: T) =
-  ## Sugar that allows you to have name and lambda 
+  ## Sugar that allows you to have name and lambda
   scheduler.every(often, handler, name)
-  
+
 proc at*[T: HandlerTypes](scheduler: SchedulerBase[T], time: DateTime, handler: T, name = defaultTaskName) =
   ## Runs a task at a certain date/time (only runs once).
   runnableExamples:
@@ -471,6 +465,6 @@ proc start*(scheduler: AsyncScheduler | Scheduler, periodicCheck = 0) {.multisyn
         scheduler &= currTask
 
   scheduler.running = false
-  
+
 export times
 export cron
