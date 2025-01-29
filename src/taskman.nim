@@ -209,11 +209,12 @@ proc wakeUp[T](tasks: SchedulerBase[T]) =
 func `<`(a, b: TaskBase): bool {.inline.} = a.startTime < b.startTime
 func `==`(a, b: TaskBase): bool {.inline.} = a.handler == b.handler
 
-proc defaultErrorHandler[T](tasks: SchedulerBase[T], task: TaskBase[T],  exception: ref Exception) =
+proc defaultErrorHandler[T: HandlerTypes](tasks: SchedulerBase[T], task: TaskBase[T],  exception: ref Exception) =
   ## Default error handler, just raises the error further up the stack
   raise exception
 
-proc newSchedulerBase*[T](errorHandler: ErrorHandler[T] = defaultErrorHandler[T]): SchedulerBase[T] =
+proc newSchedulerBase*[T: HandlerTypes](errorHandler: ErrorHandler[T] = defaultErrorHandler[T]): SchedulerBase[T] =
+  ## Creates a new scheduler that calls procs of `T` (which can't)
   SchedulerBase[T](
     tasks: initHeapQueue[TaskBase[T]](),
     errorHandler: errorHandler
@@ -243,7 +244,7 @@ proc len*(scheduler: SchedulerBase): int {.inline.} =
   ## Returns number of tasks in the scheduler
   scheduler.tasks.len
 
-proc newTask*[T](interval: TimeInterval, handler: T, name = defaultTaskName): TaskBase[T] =
+proc newTask*[T: HandlerTypes](interval: TimeInterval, handler: T, name = defaultTaskName): TaskBase[T] =
   ## Creates a new task which can be added to a scheduler.
   ## This task will run every `interval`
   TaskBase[T](
