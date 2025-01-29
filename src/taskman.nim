@@ -206,14 +206,14 @@ proc wakeUp[T](tasks: SchedulerBase[T]) =
   else:
     discard
 
-func `<`(a, b: TaskBase[HandlerTypes]): bool {.inline.} = a.startTime < b.startTime
-func `==`(a, b: TaskBase[HandlerTypes]): bool {.inline.} = a.handler == b.handler
+func `<`(a, b: TaskBase): bool {.inline.} = a.startTime < b.startTime
+func `==`(a, b: TaskBase): bool {.inline.} = a.handler == b.handler
 
-proc defaultErrorHandler[T: HandlerTypes](tasks: SchedulerBase[T], task: TaskBase[T],  exception: ref Exception) =
+proc defaultErrorHandler[T](tasks: SchedulerBase[T], task: TaskBase[T],  exception: ref Exception) =
   ## Default error handler, just raises the error further up the stack
   raise exception
 
-proc newSchedulerBase*[T: HandlerTypes](errorHandler: ErrorHandler[T] = defaultErrorHandler[T]): SchedulerBase[T] =
+proc newSchedulerBase*[T](errorHandler: ErrorHandler[T] = defaultErrorHandler[T]): SchedulerBase[T] =
   SchedulerBase[T](
     tasks: initHeapQueue[TaskBase[T]](),
     errorHandler: errorHandler
@@ -243,7 +243,7 @@ proc len*(scheduler: SchedulerBase): int {.inline.} =
   ## Returns number of tasks in the scheduler
   scheduler.tasks.len
 
-proc newTask*[T: HandlerTypes](interval: TimeInterval, handler: T, name = defaultTaskName): TaskBase[T] =
+proc newTask*[T](interval: TimeInterval, handler: T, name = defaultTaskName): TaskBase[T] =
   ## Creates a new task which can be added to a scheduler.
   ## This task will run every `interval`
   TaskBase[T](
@@ -254,7 +254,7 @@ proc newTask*[T: HandlerTypes](interval: TimeInterval, handler: T, name = defaul
       name: name
   )
 
-proc newTask*[T: HandlerTypes](time: DateTime, handler: T, name = defaultTaskName): TaskBase[T] =
+proc newTask*[T](time: DateTime, handler: T, name = defaultTaskName): TaskBase[T] =
   ## Creates a new task which can be added to a scheduler.
   ## This task will only run once (will run at **time**)
   TaskBase[T](
@@ -264,7 +264,7 @@ proc newTask*[T: HandlerTypes](time: DateTime, handler: T, name = defaultTaskNam
     name: name
   )
 
-proc newTask*[T: HandlerTypes](cron: Cron, handler: T, name = defaultTaskName): TaskBase[T] =
+proc newTask*[T](cron: Cron, handler: T, name = defaultTaskName): TaskBase[T] =
   ## Creates a new task which can be added to a scheduler.
   TaskBase[T](
     kind: Cron,
@@ -274,12 +274,12 @@ proc newTask*[T: HandlerTypes](cron: Cron, handler: T, name = defaultTaskName): 
     name: name
   )
 
-proc add*[T: HandlerTypes](scheduler: SchedulerBase[T], task: TaskBase[T]) {.inline.} =
+proc add*[T](scheduler: SchedulerBase[T], task: TaskBase[T]) {.inline.} =
   ## Adds a task to the scheduler.
   scheduler.tasks.push task
   scheduler.wakeUp()
 
-proc every*[T: HandlerTypes](scheduler: SchedulerBase[T]; interval: TimeInterval, handler: T, name = defaultTaskName) =
+proc every*[T](scheduler: SchedulerBase[T]; interval: TimeInterval, handler: T, name = defaultTaskName) =
   ## Runs a task every time the interval occurs.
   runnableExamples:
     let tasks = newAsyncScheduler()
@@ -293,7 +293,7 @@ proc every*[T: HandlerTypes](scheduler: SchedulerBase[T]; interval: TimeInterval
   scheduler &= newTask(interval, handler, name)
 
 
-proc every*[T: HandlerTypes](scheduler: SchedulerBase[T], cron: Cron, handler: T, name = defaultTaskName) =
+proc every*[T](scheduler: SchedulerBase[T], cron: Cron, handler: T, name = defaultTaskName) =
   ## Runs a task every time a cron timer is valid
   runnableExamples:
     let tasks = newAsyncScheduler()
@@ -303,11 +303,11 @@ proc every*[T: HandlerTypes](scheduler: SchedulerBase[T], cron: Cron, handler: T
   #==#
   scheduler &= newTask(cron, handler, name)
 
-proc every*[T: HandlerTypes](scheduler: SchedulerBase[T], often: TimeInterval | Cron, name: string, handler: T) =
+proc every*[T](scheduler: SchedulerBase[T], often: TimeInterval | Cron, name: string, handler: T) =
   ## Sugar that allows you to have name and lambda
   scheduler.every(often, handler, name)
 
-proc at*[T: HandlerTypes](scheduler: SchedulerBase[T], time: DateTime, handler: T, name = defaultTaskName) =
+proc at*[T](scheduler: SchedulerBase[T], time: DateTime, handler: T, name = defaultTaskName) =
   ## Runs a task at a certain date/time (only runs once).
   runnableExamples:
     let tasks = newAsyncScheduler()
@@ -317,11 +317,11 @@ proc at*[T: HandlerTypes](scheduler: SchedulerBase[T], time: DateTime, handler: 
   #==#
   scheduler &= newTask(time, handler, name)
 
-proc at*[T: HandlerTypes](scheduler: SchedulerBase[T], interval: TimeInterval, name: string, handler: T) =
+proc at*[T](scheduler: SchedulerBase[T], interval: TimeInterval, name: string, handler: T) =
   ## Sugar that allows you to have name and lambda
   scheduler.at(interval, handler, name)
 
-proc wait*[T: HandlerTypes](scheduler: SchedulerBase[T], interval: TimeInterval, handler: T, name = defaultTaskName) =
+proc wait*[T](scheduler: SchedulerBase[T], interval: TimeInterval, handler: T, name = defaultTaskName) =
   ## Waits `interval` amount of time and then runs task (only runs once).
   runnableExamples "--threads:off":
     import std/httpclient
@@ -333,15 +333,15 @@ proc wait*[T: HandlerTypes](scheduler: SchedulerBase[T], interval: TimeInterval,
   #==#
   scheduler.at(now() + interval, handler, name)
 
-proc wait*[T: HandlerTypes](scheduler: SchedulerBase[T], interval: TimeInterval, name: string, handler: T) =
+proc wait*[T](scheduler: SchedulerBase[T], interval: TimeInterval, name: string, handler: T) =
   ## Sugar that allows you to have name and lambda
   scheduler.wait(interval, handler, name)
 
-proc milliSecondsLeft(task: TaskBase[HandlerTypes]): int =
+proc milliSecondsLeft(task: TaskBase): int =
   ## Returns time different in milliseconds between now and the tasks start time
   result = int((task.startTime - getTime()).inMilliseconds)
 
-proc del*[T: HandlerTypes](scheduler: SchedulerBase[T], task: TaskBase[T]) =
+proc del*[T](scheduler: SchedulerBase[T], task: TaskBase[T]) =
   ## Removes a task from the scheduler
   runnableExamples:
     import std/sugar
@@ -359,7 +359,7 @@ proc del*[T: HandlerTypes](scheduler: SchedulerBase[T], task: TaskBase[T]) =
   let index = scheduler.tasks.find task
   scheduler.tasks.del index
 
-proc del*(scheduler: SchedulerBase[HandlerTypes], task: string) =
+proc del*(scheduler: SchedulerBase, task: string) =
   ## Removes a task from the scheduler (via its name).
   ## If there are multiple tasks with the same name then the first task is deleted
   runnableExamples:
@@ -414,7 +414,9 @@ template onlyRun*(times: int) =
     else:
       inc timesRan
 
-proc start*(scheduler: AsyncScheduler | Scheduler, periodicCheck = 0) =
+template StartReturn(T): typedesc = (when T is AsyncScheduler : Future[void] else: void)
+
+proc start*[T](scheduler: SchedulerBase[T], periodicCheck = 0): StartReturn(T) {.gcsafe.} =
   ## Starts running the tasks.
   ## Call with `asyncCheck` to make it run in the background
   ##
@@ -423,7 +425,7 @@ proc start*(scheduler: AsyncScheduler | Scheduler, periodicCheck = 0) =
   scheduler.running = true
   while scheduler.len > 0 or periodicCheck > 0:
     if scheduler.len == 0:
-      when not isAsync:
+      when isAsync:
         await sleepAsync(periodicCheck)
       else:
         sleep periodicCheck
@@ -454,6 +456,7 @@ proc start*(scheduler: AsyncScheduler | Scheduler, periodicCheck = 0) =
           currTask.startTime = currTask.next()
           scheduler &= currTask
         try:
+          when
           await currTask.handler()
         except RemoveTaskException:
           scheduler.del currTask
