@@ -213,7 +213,7 @@ proc defaultErrorHandler[T: HandlerTypes](tasks: SchedulerBase[T], task: TaskBas
   ## Default error handler, just raises the error further up the stack
   raise exception
 
-proc newSchedulerBase[T: HandlerTypes](errorHandler: ErrorHandler[T]): SchedulerBase[T] =
+proc newSchedulerBase*[T: HandlerTypes](errorHandler: ErrorHandler[T] = defaultErrorHandler[T]): SchedulerBase[T] =
   SchedulerBase[T](
     tasks: initHeapQueue[TaskBase[T]](),
     errorHandler: errorHandler
@@ -414,7 +414,7 @@ template onlyRun*(times: int) =
     else:
       inc timesRan
 
-proc start*(scheduler: AsyncScheduler | Scheduler, periodicCheck = 0) {.multisync.} =
+proc start*(scheduler: AsyncScheduler | Scheduler, periodicCheck = 0) =
   ## Starts running the tasks.
   ## Call with `asyncCheck` to make it run in the background
   ##
@@ -423,7 +423,7 @@ proc start*(scheduler: AsyncScheduler | Scheduler, periodicCheck = 0) {.multisyn
   scheduler.running = true
   while scheduler.len > 0 or periodicCheck > 0:
     if scheduler.len == 0:
-      when isAsync:
+      when not isAsync:
         await sleepAsync(periodicCheck)
       else:
         sleep periodicCheck

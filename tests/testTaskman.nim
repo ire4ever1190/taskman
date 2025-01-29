@@ -106,6 +106,18 @@ test "Can use a closure":
   tasks.every(1.seconds) do () {.async.}:
     echo x
 
+test "Can work gcsafe":
+  proc mustBeSafe() {.gcsafe.} =
+    let tasks = newSchedulerBase[proc () {.gcsafe.}]()
+    # let tasks = newScheduler()
+
+    tasks.every(1.seconds) do () {.gcsafe.}:
+      discard
+    if false:
+      tasks.start()
+
+  mustBeSafe()
+
 when defined(testCron):
   # Since it takes minimum 1 for a cron task to run we will put it behind a flag
   suite "Cron":
