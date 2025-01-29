@@ -151,7 +151,7 @@ type
     ##
     ## .. Note::When using `--threads:on` the proc must be gcsafe
 
-  TaskHandler* = proc ()
+  TaskHandler* = proc (): void
     ## Proc that runs in a normal scheduler
     ##
     ## .. Note::When using `--threads:on` the proc must be gcsafe
@@ -414,40 +414,28 @@ template onlyRun*(times: int) =
     else:
       inc timesRan
 
-template StartReturn(T): typedesc = (when T is AsyncScheduler : Future[void] else: void)
 
-proc start*[T](scheduler: SchedulerBase[T], periodicCheck = 0): StartReturn(T) {.gcsafe.} =
-  ## Starts running the tasks.
-  ## Call with `asyncCheck` to make it run in the background
-  ##
-  ## * **periodicCheck**: This prevents the scheduler from fulling stopping and specifies how many milliseconds to poll for new tasks. Also use this with non async scheduler to allow you to add new tasks in that might be shorter than current running one
-  const isAsync = scheduler is AsyncScheduler
+proc start*[T: AsyncTaskHandler](scheduler: SchedulerBase[T], periodicCheck = 0) {.async.} =
+  ## Starts running tasks. Use [asyncCheck](https://nim-lang.org/docs/asyncfutures.html#asyncCheck%2CFuture%5BT%5D) if you want the task to run in the background.
+  ## * **periodicCheck**: This prevents the scheduler from fulling stopping and specifies how many milliseconds to poll for new tasks.
   scheduler.running = true
   while scheduler.len > 0 or periodicCheck > 0:
     if scheduler.len == 0:
-      when isAsync:
-        await sleepAsync(periodicCheck)
-      else:
-        sleep periodicCheck
+      await sleepAsync(periodicCheck)
       continue # Run loop again to check if stuff has been added while sleeping
 
     let sleepTime = scheduler.tasks[0].milliSecondsLeft
-    when isAsync:
-      # This is more or less copy and pasted from async dispatch.
-      # But we make a few modifications so that we can effectively cancel the sleeping.
-      # This enables us to force the scheduler to check for new tasks when they get added (Instead of needing to poll with periodicCheck)
-      var retFuture = newFuture[void]("start")
-      let
-        p = getGlobalDispatcher()
-      scheduler.timer = (getMonoTime() + initDuration(milliseconds = sleepTime), retFuture)
-      p.timers.push(scheduler.timer)
-      await retFuture
-    else:
-      # We can't do any fancy sleep cancelling so we need to do this
-      if periodicCheck == 0:
-        sleep sleepTime
-      else:
-        sleep periodicCheck
+
+    # This is more or less copy and pasted from async dispatch.
+    # But we make a few modifications so that we can effectively cancel the sleeping.
+    # This enables us to force the scheduler to check for new tasks when they get added (Instead of needing to poll with periodicCheck)
+    var retFuture = newFuture[void]("start")
+    let
+      p = getGlobalDispatcher()
+    scheduler.timer = (getMonoTime() + initDuration(milliseconds = sleepTime), retFuture)
+    p.timers.push(scheduler.timer)
+    await retFuture
+
     if scheduler.len > 0:
       var currTask = scheduler.tasks.pop()
       if getTime() >= currTask.startTime:
@@ -456,8 +444,45 @@ proc start*[T](scheduler: SchedulerBase[T], periodicCheck = 0): StartReturn(T) {
           currTask.startTime = currTask.next()
           scheduler &= currTask
         try:
-          when
           await currTask.handler()
+        except RemoveTaskException:
+          scheduler.del currTask
+        except CatchableError as e:
+          e.msg = "Error with task '" & currTask.name & "': " & e.msg
+          scheduler.errorHandler(scheduler, currTask, e)
+      else:
+        # Add task back so it can be waited on again
+        scheduler &= currTask
+
+  scheduler.running = false
+
+
+proc start*[T: TaskHandler](scheduler: SchedulerBase[T], periodicCheck = 0) =
+  ## Starts running the tasks.
+  ##
+  ## * **periodicCheck**: This prevents the scheduler from fulling stopping and specifies how many milliseconds to poll for new tasks. Also enables the scheduler to check for shorter tasks getting added
+  scheduler.running = true
+  while scheduler.len > 0 or periodicCheck > 0:
+    if scheduler.len == 0:
+      sleep periodicCheck
+      continue # Run loop again to check if stuff has been added while sleeping
+
+    let sleepTime = scheduler.tasks[0].milliSecondsLeft
+    # We can't do any fancy sleep cancelling so we need to do this
+    if periodicCheck == 0:
+      sleep sleepTime
+    else:
+      sleep periodicCheck
+
+    if scheduler.len > 0:
+      var currTask = scheduler.tasks.pop()
+      if getTime() >= currTask.startTime:
+        if currTask.kind != OneShot:
+          # Schedule task again
+          currTask.startTime = currTask.next()
+          scheduler &= currTask
+        try:
+          currTask.handler()
         except RemoveTaskException:
           scheduler.del currTask
         except CatchableError as e:
