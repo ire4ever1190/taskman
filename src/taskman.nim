@@ -425,7 +425,7 @@ Differencs are
  - how it calls the handler
 ]#
 
-macro mutliGenericSync(prc, arg: untyped,syncRestriction: typedesc, asyncRestriction: typedesc): untyped =
+macro multiGenericSync(arg: untyped, syncRestriction: untyped, asyncRestriction: untyped, prc: untyped) =
   ## Like `multisync` from the stdlib except this operates on generic restrictions instead of concrete parameters.
   ## Excepts the proc to already have a generic argument
   # Find the generic parameter
@@ -438,16 +438,19 @@ macro mutliGenericSync(prc, arg: untyped,syncRestriction: typedesc, asyncRestric
       "Couldn't find the generic parameter".error(arg)
     res
 
-  # Sync version doesn't need any changes besides the generic restriction
   let
     syncProc = prc.copy()
     asyncProc = prc.copy()
+
+  # Apply restriction, and add in an `await` template that just ignores await
   syncProc[2][genericParamIdx][1] = syncRestriction
+  let awaitTempl = quote do:
+    template await(value: typed): untyped =
+      value
+  syncProc.body = newStmtList(awaitTempl, syncProc.body)
 
   # Async version must have future type attached
-  if asyncProc.params[0].kind == nnkEmpty:
-    "Missing return type (must be void or nothing)".error(asyncProc.params[0])
-  asyncProc.params[0] = nnkBracketExpr.newTree(ident"Future", asyncProc.params[0])
+  asyncProc.params[0] = nnkBracketExpr.newTree(ident"Future", asyncProc.params[0] or ident"void")
 
   # And async pragma
   asyncProc.addPragma(ident"async")
@@ -456,26 +459,36 @@ macro mutliGenericSync(prc, arg: untyped,syncRestriction: typedesc, asyncRestric
   asyncProc[2][genericParamIdx][1] = asyncRestriction
 
   result = newStmtList(syncProc, asyncProc)
+  echo result.toStrLit
 
-proc start*[T: AsyncTaskHandler](scheduler: SchedulerBase[T], periodicCheck = 0) {.async.} =
-  ## Starts running tasks. Use [asyncCheck](https://nim-lang.org/docs/asyncfutures.html#asyncCheck%2CFuture%5BT%5D) if you want the task to run in the background.
-  ## * **periodicCheck**: This prevents the scheduler from fulling stopping and specifies how many milliseconds to poll for new tasks.
+
+proc start*[T](scheduler: SchedulerBase[T], periodicCheck = 0) {.multiGenericSync(T, TaskHandler, AsyncTaskHandler).} =
+  ## Starts running tasks.
+  ## * **periodicCheck**: This prevents the scheduler from fulling stopping and specifies how many milliseconds to poll for new tasks. Also needed if tasks are added midflight
   scheduler.running = true
   while scheduler.len > 0 or periodicCheck > 0:
     if scheduler.len == 0:
-      await sleepAsync(periodicCheck)
+      when T is AsyncTaskHandler:
+        await sleepAsync(periodicCheck)
+      else:
+        sleep periodicCheck
       continue # Run loop again to check if stuff has been added while sleeping
 
     let sleepTime = scheduler.tasks[0].milliSecondsLeft
-    # This is more or less copy and pasted from async dispatch.
-    # But we make a few modifications so that we can effectively cancel the sleeping.
-    # This enables us to force the scheduler to check for new tasks when they get added (Instead of needing to poll with periodicCheck)
-    let
-      retFuture = newFuture[void]("start")
-      p = getGlobalDispatcher()
-    scheduler.timer = (getMonoTime() + initDuration(milliseconds = sleepTime), retFuture)
-    p.timers.push(scheduler.timer)
-    await retFuture
+    when T is AsyncTaskHandler:
+      # This is more or less copy and pasted from async dispatch.
+      # But we make a few modifications so that we can effectively cancel the sleeping.
+      # This enables us to force the scheduler to check for new tasks when they get added (Instead of needing to poll with periodicCheck)
+      let
+        retFuture = newFuture[void]("start")
+        p = getGlobalDispatcher()
+      scheduler.timer = (getMonoTime() + initDuration(milliseconds = sleepTime), retFuture)
+      p.timers.push(scheduler.timer)
+      await retFuture
+    else:
+      # We can't do any fancy sleep cancelling so we need to do this
+      sleep if periodicCheck == 0: sleepTime
+      else: periodicCheck
 
     if scheduler.len > 0:
       var currTask = scheduler.tasks.pop()
@@ -486,42 +499,6 @@ proc start*[T: AsyncTaskHandler](scheduler: SchedulerBase[T], periodicCheck = 0)
           scheduler &= currTask
         try:
           await currTask.handler()
-        except RemoveTaskException:
-          scheduler.del currTask
-        except CatchableError as e:
-          e.msg = "Error with task '" & currTask.name & "': " & e.msg
-          scheduler.errorHandler(scheduler, currTask, e)
-      else:
-        # Add task back so it can be waited on again
-        scheduler &= currTask
-
-  scheduler.running = false
-
-
-proc start*[T: TaskHandler](scheduler: SchedulerBase[T], periodicCheck = 0) =
-  ## Starts running the tasks.
-  ##
-  ## * **periodicCheck**: This prevents the scheduler from fulling stopping and specifies how many milliseconds to poll for new tasks. Also enables the scheduler to check for shorter tasks getting added
-  scheduler.running = true
-  while scheduler.len > 0 or periodicCheck > 0:
-    if scheduler.len == 0:
-      sleep periodicCheck
-      continue # Run loop again to check if stuff has been added while sleeping
-
-    let sleepTime = scheduler.tasks[0].milliSecondsLeft
-    # We can't do any fancy sleep cancelling so we need to do this
-    sleep if periodicCheck == 0: sleepTime
-          else: periodicCheck
-
-    if scheduler.len > 0:
-      var currTask = scheduler.tasks.pop()
-      if getTime() >= currTask.startTime:
-        if currTask.kind != OneShot:
-          # Schedule task again
-          currTask.startTime = currTask.next()
-          scheduler &= currTask
-        try:
-          currTask.handler()
         except RemoveTaskException:
           scheduler.del currTask
         except CatchableError as e:
