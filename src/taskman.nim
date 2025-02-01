@@ -203,11 +203,14 @@ proc wakeUp[T](tasks: SchedulerBase[T]) =
       tasks.timer.fut.complete()
       # Disarm the timer
       tasks.timer.fut = nil
-  else:
-    discard
 
-func `<`(a, b: TaskBase): bool {.inline.} = a.startTime < b.startTime
-func `==`(a, b: TaskBase): bool {.inline.} = a.handler == b.handler
+func `<`*[T](a, b: TaskBase[T]): bool {.inline.} =
+  ## Checks if one task is scheduled before another
+  a.startTime < b.startTime
+
+func `==`*[T](a, b: TaskBase[T]): bool {.inline.} =
+  ## Two handlers are considered equal if they have the same handler
+  a.handler == b.handler
 
 proc defaultErrorHandler[T: HandlerTypes](tasks: SchedulerBase[T], task: TaskBase[T],  exception: ref Exception) =
   ## Default error handler, just raises the error further up the stack
@@ -464,7 +467,6 @@ proc start*[T: AsyncTaskHandler](scheduler: SchedulerBase[T], periodicCheck = 0)
       continue # Run loop again to check if stuff has been added while sleeping
 
     let sleepTime = scheduler.tasks[0].milliSecondsLeft
-
     # This is more or less copy and pasted from async dispatch.
     # But we make a few modifications so that we can effectively cancel the sleeping.
     # This enables us to force the scheduler to check for new tasks when they get added (Instead of needing to poll with periodicCheck)
