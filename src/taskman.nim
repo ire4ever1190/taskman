@@ -216,11 +216,15 @@ proc defaultErrorHandler[T: HandlerTypes](tasks: SchedulerBase[T], task: TaskBas
   ## Default error handler, just raises the error further up the stack
   raise exception
 
-proc newSchedulerBase*[T: HandlerTypes](errorHandler: ErrorHandler[T] = defaultErrorHandler[T]): SchedulerBase[T] =
-  ## Creates a new scheduler that calls procs of `T`. Only use this if you want to add extra restriction to the proc type (exceptions, gcsafe, etc)
+proc newSchedulerBase*[T: HandlerTypes](errorHandler: ErrorHandler[T] = nil): SchedulerBase[T] =
+  ## Creates a new scheduler that calls procs of `T`. Only use this if you want to add extra restriction to the proc type (exceptions, gcsafe, etc).
+  ##
+  ## * **errorHandler**: Proc that is called when exceptions are raised in tasks. By default it just reraises exceptions
   SchedulerBase[T](
     tasks: initHeapQueue[TaskBase[T]](),
-    errorHandler: errorHandler
+    # Generic bug that is fixed on devel.
+    # T isn't available in default params so we can't instantiate the default handler.
+    errorHandler: if errorHandler != nil: errorHandler else: defaultErrorHandler[T]
   )
 
 proc newScheduler*(errorHandler: ErrorHandler[TaskHandler] = defaultErrorHandler[TaskHandler]): Scheduler =
