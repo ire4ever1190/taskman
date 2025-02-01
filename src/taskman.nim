@@ -214,7 +214,7 @@ proc defaultErrorHandler[T: HandlerTypes](tasks: SchedulerBase[T], task: TaskBas
   raise exception
 
 proc newSchedulerBase*[T: HandlerTypes](errorHandler: ErrorHandler[T] = defaultErrorHandler[T]): SchedulerBase[T] =
-  ## Creates a new scheduler that calls procs of `T` (which can't)
+  ## Creates a new scheduler that calls procs of `T`. Only use this if you want to add extra restriction to the proc type (exceptions, gcsafe, etc)
   SchedulerBase[T](
     tasks: initHeapQueue[TaskBase[T]](),
     errorHandler: errorHandler
@@ -401,6 +401,7 @@ proc next*(task: TaskBase): Time {.raises: [TooFarAheadCron].} =
   of Cron:
     result = now().next(task.cronFormat).toTime()
 
+# TODO: Remove, this is a terrible helper
 template onlyRun*(times: int) =
   ## Make task only run a certain number of times
   runnableExamples:
@@ -415,6 +416,43 @@ template onlyRun*(times: int) =
     else:
       inc timesRan
 
+#[
+Differencs are
+ - How it sleeps
+ - how it calls the handler
+]#
+
+macro mutliGenericSync(prc, arg: untyped,syncRestriction: typedesc, asyncRestriction: typedesc): untyped =
+  ## Like `multisync` from the stdlib except this operates on generic restrictions instead of concrete parameters.
+  ## Excepts the proc to already have a generic argument
+  # Find the generic parameter
+  let genericParamIdx = block:
+    var res = -1
+    for i, param in prc[2]:
+      if param[0].eqIdent(arg):
+        res = i
+    if res == -1:
+      "Couldn't find the generic parameter".error(arg)
+    res
+
+  # Sync version doesn't need any changes besides the generic restriction
+  let
+    syncProc = prc.copy()
+    asyncProc = prc.copy()
+  syncProc[2][genericParamIdx][1] = syncRestriction
+
+  # Async version must have future type attached
+  if asyncProc.params[0].kind == nnkEmpty:
+    "Missing return type (must be void or nothing)".error(asyncProc.params[0])
+  asyncProc.params[0] = nnkBracketExpr.newTree(ident"Future", asyncProc.params[0])
+
+  # And async pragma
+  asyncProc.addPragma(ident"async")
+
+  # And generic restruction
+  asyncProc[2][genericParamIdx][1] = asyncRestriction
+
+  result = newStmtList(syncProc, asyncProc)
 
 proc start*[T: AsyncTaskHandler](scheduler: SchedulerBase[T], periodicCheck = 0) {.async.} =
   ## Starts running tasks. Use [asyncCheck](https://nim-lang.org/docs/asyncfutures.html#asyncCheck%2CFuture%5BT%5D) if you want the task to run in the background.
@@ -430,8 +468,8 @@ proc start*[T: AsyncTaskHandler](scheduler: SchedulerBase[T], periodicCheck = 0)
     # This is more or less copy and pasted from async dispatch.
     # But we make a few modifications so that we can effectively cancel the sleeping.
     # This enables us to force the scheduler to check for new tasks when they get added (Instead of needing to poll with periodicCheck)
-    var retFuture = newFuture[void]("start")
     let
+      retFuture = newFuture[void]("start")
       p = getGlobalDispatcher()
     scheduler.timer = (getMonoTime() + initDuration(milliseconds = sleepTime), retFuture)
     p.timers.push(scheduler.timer)
@@ -470,10 +508,8 @@ proc start*[T: TaskHandler](scheduler: SchedulerBase[T], periodicCheck = 0) =
 
     let sleepTime = scheduler.tasks[0].milliSecondsLeft
     # We can't do any fancy sleep cancelling so we need to do this
-    if periodicCheck == 0:
-      sleep sleepTime
-    else:
-      sleep periodicCheck
+    sleep if periodicCheck == 0: sleepTime
+          else: periodicCheck
 
     if scheduler.len > 0:
       var currTask = scheduler.tasks.pop()
