@@ -463,8 +463,29 @@ macro multiGenericSync(arg: untyped, syncRestriction: untyped, asyncRestriction:
   asyncProc[2][genericParamIdx][1] = asyncRestriction
 
   result = newStmtList(syncProc, asyncProc)
-  echo result.toStrLit
 
+proc runNextTask[T](scheduler: SchedulerBase[T]) {.multiGenericSync(T, TaskHandler, AsyncTaskHandler).} =
+  ## Runs the next scheduled task. If no task is scheduled to run then it does nothing
+  if scheduler.len == 0: return
+
+  var currTask = scheduler.tasks.pop()
+  if getTime() < currTask.startTime:
+    # Add task back so it can be waited on again
+    scheduler &= currTask
+    return
+
+  if currTask.kind != OneShot:
+    # Schedule task again
+    currTask.startTime = currTask.next()
+    scheduler &= currTask
+
+  try:
+    await currTask.handler()
+  except RemoveTaskException:
+    scheduler.del currTask
+  except CatchableError as e:
+    e.msg = "Error with task '" & currTask.name & "': " & e.msg
+    scheduler.errorHandler(scheduler, currTask, e)
 
 proc start*[T](scheduler: SchedulerBase[T], periodicCheck = 0) {.multiGenericSync(T, TaskHandler, AsyncTaskHandler).} =
   ## Starts running tasks.
@@ -494,23 +515,7 @@ proc start*[T](scheduler: SchedulerBase[T], periodicCheck = 0) {.multiGenericSyn
       sleep if periodicCheck == 0: sleepTime
       else: periodicCheck
 
-    if scheduler.len > 0:
-      var currTask = scheduler.tasks.pop()
-      if getTime() >= currTask.startTime:
-        if currTask.kind != OneShot:
-          # Schedule task again
-          currTask.startTime = currTask.next()
-          scheduler &= currTask
-        try:
-          await currTask.handler()
-        except RemoveTaskException:
-          scheduler.del currTask
-        except CatchableError as e:
-          e.msg = "Error with task '" & currTask.name & "': " & e.msg
-          scheduler.errorHandler(scheduler, currTask, e)
-      else:
-        # Add task back so it can be waited on again
-        scheduler &= currTask
+    await scheduler.runNextTask()
 
   scheduler.running = false
 
