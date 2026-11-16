@@ -19,7 +19,7 @@ runnableExamples:
   # 4-10 4,5,6 * * sun,mon
   assert initCron(
     {4.MinuteRange .. 10},
-    {4.HourRange, 5, 6}, 
+    {4.HourRange, 5, 6},
     weekDays = {dSun, dMon}
   ) == cron(4 - 10, {4, 5, 6}, weekDays = {dSun, dMon})
 
@@ -28,7 +28,7 @@ runnableExamples:
 
 ## This implements cron in a slightly non standard way in that both `monthDays` and `weekDays` are checked e.g.
 runnableExamples:
-  let 
+  let
     start = dateTime(2000, mJan, 1)
     form  = cron(x, x, 10, x, dSun)
   # In normal cron it would match 2000-01-10 (Which is a monday)
@@ -51,7 +51,7 @@ type
 
 const maxYears* {.intdefine.} = 3 # Max years to search ahead to find valid cron time
 
-const 
+const
   everyMinute* = {0.MinuteRange .. 59}
     ## Use with cron task to run every minute
   everyHour* = {0.HourRange .. 23}
@@ -89,10 +89,10 @@ func max[T](s: set[T]): T {.raises: [].} =
 
 func matches(date: DateTime, format: Cron): bool {.raises: [].}=
   ## Returns true if date matches for format
-  date.minute in format.minutes and 
-  date.hour in format.hours and 
-  date.monthDay in format.monthDays and 
-  date.month in format.months and 
+  date.minute in format.minutes and
+  date.hour in format.hours and
+  date.monthDay in format.monthDays and
+  date.month in format.months and
   date.weekday in format.weekDays
 
 func isValid*(format: Cron): bool {.raises: [].} =
@@ -114,13 +114,13 @@ func possibleDays(allowedDays: set[WeekDay], date: DateTime): set[MonthDayRange]
   for monthDay in date.monthDays:
     let day = monthDay.getDayOfWeek(date.month, date.year)
     if day in allowedDays:
-      result.incl monthDay  
+      result.incl monthDay
 
 func `/`*[T: CronRanges](values: set[T], n: int): set[T] {.raises: [].} =
   ## Returns every nth value starting from the first value in values
   runnableExamples:
     # Set of values to run every second day
-    assert everyWeekDay / 2 == {dMon, dWed, dFri, dSun} 
+    assert everyWeekDay / 2 == {dMon, dWed, dFri, dSun}
     # Only use every third hour in our range
     assert {5.HourRange .. 15} / 4 == {5.HourRange, 9, 13}
     # It only does every second value
@@ -143,7 +143,7 @@ proc next*(now: DateTime, format: Cron): DateTime {.raises: [TooFarAheadCron].} 
   # Implementation from here
   # https://github.com/robfig/cron/blob/master/spec.go#L58
   assert format.isValid, $format & " is not a valid format"
-  
+
   var zerod = false
   let maxYear = now.year + maxYears
   result = now
@@ -156,7 +156,7 @@ proc next*(now: DateTime, format: Cron): DateTime {.raises: [TooFarAheadCron].} 
     # For some reason putting the ceil in an else block breaks stuff
     result -= result.nanosecond.nanoseconds
     result -= result.second.seconds
-    
+
   result = result.ceil()
   while not result.matches(format) and now.year <= maxYear:
     block wrap:
@@ -168,7 +168,7 @@ proc next*(now: DateTime, format: Cron): DateTime {.raises: [TooFarAheadCron].} 
         result += 1.months
         if result.month == mJan:
           break wrap
-          
+
       while (result.monthDay notin format.monthDays or result.weekDay notin format.weekDays):
         if not zerod:
           zerod = true
@@ -194,9 +194,9 @@ proc next*(now: DateTime, format: Cron): DateTime {.raises: [TooFarAheadCron].} 
 
     if result.year > maxYear:
       raise (ref TooFarAheadCron)(msg: "Could not find next valid date for " & $format)
-          
-func initCron*(minutes = everyMinute, hours = everyHour, 
-               monthDays = everyMonthDay, months = everyMonth, 
+
+func initCron*(minutes = everyMinute, hours = everyHour,
+               monthDays = everyMonthDay, months = everyMonth,
                weekDays = everyWeekDay): Cron {.raises: [].} =
   ## Makes a new cron format.
   ## Sets passed in cannot be empty (Since that wouldn't make sense)
@@ -205,7 +205,7 @@ func initCron*(minutes = everyMinute, hours = everyHour,
     let weekendMornings = initCron(hours = {8.HourRange}, weekDays = {dSat, dSun})
   #==#
   template res(field: untyped) =
-    ## Updates field in result with parameter of same name 
+    ## Updates field in result with parameter of same name
     result.field = field
   res minutes
   res hours
@@ -217,7 +217,7 @@ func initCron*(minutes = everyMinute, hours = everyHour,
 proc translateCronNode(nodes: NimNode, every: NimNode): NimNode =
   ## Translates the DSL into actual nim code
   let rangeType = every.getTypeImpl[1]
-  
+
   case nodes.kind:
   of nnkIdent, nnkSym:
     if nodes.eqIdent("x"):
@@ -249,19 +249,19 @@ proc translateCronNode(nodes: NimNode, every: NimNode): NimNode =
       )
     else:
       "Invalid operator only - , / are allowed".error(nodes)
-  of nnkCurly: # Set 
+  of nnkCurly: # Set
     result = nodes
     if nodes.len > 0:
       nodes[0] = nnkCast.newTree(rangeType, nodes[0])
     else:
       "Empty set doesn't make sense".error(nodes)
   else:
-    "Invalid syntax, check docs for how to use cron macro".error(nodes)  
+    "Invalid syntax, check docs for how to use cron macro".error(nodes)
 
 var x: int # We need some symbol to exist for the default value
 macro cron*(minutes: untyped = x, hours: untyped = x, monthDays: untyped = x,
             months: untyped = x, weekDays: untyped = x): Cron =
-  ## Macro to simplify creating cron formats. 
+  ## Macro to simplify creating cron formats.
   ## Syntax is similar to cron
   ##
   ## * `/`: Define count
@@ -276,10 +276,10 @@ macro cron*(minutes: untyped = x, hours: untyped = x, monthDays: untyped = x,
     # do this every second day of the month
     assert cron(5 - 10, {1, 5}, x / 2, x, x) == initCron(
       {5.MinuteRange .. 10},
-      {1.HourRange, 5}, 
+      {1.HourRange, 5},
       everyMonthDay / 2
     )
-    
+
   result = nnkCall.newTree bindSym("initCron")
   result &= translateCronNode(minutes, bindSym("everyMinute"))
   result &= translateCronNode(hours, bindSym("everyHour"))

@@ -3,7 +3,7 @@ import std/unittest
 
 
 test "Range counting":
-  check everyWeekDay / 2 == {dMon, dWed, dFri, dSun} 
+  check everyWeekDay / 2 == {dMon, dWed, dFri, dSun}
   check everyMonth / 1 == everyMonth
 
 test "Invalid cron format":
@@ -41,6 +41,28 @@ suite "Cron macro":
   test "* * * feb - dec *":
     check cron(months = mFeb - mDec) == initCron(months = {mFeb .. mDec})
 
+suite "Cron Parser":
+  test "* * * * *":
+    check cron(x, x, x, x, x) == parseCron("* * * * *")
+
+  test "5 * * * *":
+    check cron(5, x, x, x, x) == parseCron("5 * * * *")
+
+  test "5-10 * * * *":
+    check cron(5 - 10, x, x, x, x) == parseCron("5-10 * * * *")
+
+  test "*/10 * * * *":
+    check cron(x / 10, x, x, x, x) == parseCron("*/10 * * * *")
+
+  test "5-20/10 * * * *":
+    check cron((5 - 20) / 10, x, x, x, x) == parseCron("5-20/10 * * * *")
+
+  test "1,2,3,4 * * * *":
+    check cron({1, 2, 3, 4}) == parseCron("1,2,3,4 * * * *")
+
+  test "1,2,3,4/2 * * * *":
+    check cron({1, 2, 3, 4} / 2) == parseCron("1,2,3,4/2 * * * *")
+
 # Tests taken from https://github.com/soasme/nim-schedules/blob/master/tests/test_cron.nim
 
 const dateFormat = "yyyy-MM-dd hh:mm:ss"
@@ -66,7 +88,7 @@ suite "Cron timing":
     let act = dateTime(2022, mMar, 30, 16, 0, 10, 50).next(everyMin).next(everyMin)
     let exp = dateTime(2022, mMar, 30, 16, 2, 0, 0)
     check act == exp
-    
+
   test "* * 1-6 * *":
     initCron(months={mJan, mJun}).check(
       "1999-12-01 00:00:00",
