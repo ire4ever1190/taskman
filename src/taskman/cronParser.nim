@@ -10,34 +10,56 @@ import std/[sugar, setutils]
 
 import pkg/[nort]
 
+proc mapsTo[T](input: Combinator, val: T): Combinator[T] =
+  input.map((_) => val)
+
 let
   # Short hand syntax
-  hourly = e("@hourly").map((_) => cron(0, x, x, x, x))
-  daily = e("@daily").map((_) => cron(0, 0, x, x, x))
-  weekly = e("@weekly").map((_) => cron(0, 0, x, x, 0))
-  monthly = e("@monthly").map((_) => cron(0, 0, 1, x, x))
-  yearly = e("@yearly").map((_) => cron(0, 0, 1, 1, x))
-  shortcut = hourly | daily | weekly | monthly | yearly
-
+  shortcut = map {
+    -e("@hourly"): cron(0, x, x, x, x),
+    -e("@daily"): cron(0, 0, x, x, x),
+    -e("@weekly"): cron(0, 0, x, x, 0),
+    -e("@monthly"): cron(0, 0, 1, x, x),
+    -e("@yearly"): cron(0, 0, 1, 1, x)
+  }
   sp = e' '
 
-proc singleDigit[T](rng: typedesc[T]): Combinator[T] =
-  digit().map(val => T(val))
+let
+  singleDigit = digit().map(val => int8(val))
 
-proc valueRange[T](rng: typedesc[T]): Combinator[set[T]] =
-  map(singleDigit(T) <* e('-') <*> singleDigit(T)) do (inp: tuple[left, right: T]) -> set[T]:
-    {T(inp.left) .. T(inp.right)}
+  valueRange = map(singleDigit <* e('-') <*> singleDigit) do (inp: tuple[left, right: int8]) -> set[int8]:
+    {inp.left .. inp.right}
+
+proc value(T: typedesc): Combinator[set[int8]] =
+  valueRange |
+    singleDigit.map(val => {val}) |
+    e('*').mapsTo({T.low.int8 .. T.high.int8})
 
 proc flattenSet[T](inp: seq[set[T]]): set[T] =
   ## Flattens a seqeuence of sets into a single set
   for i in inp:
     result.incl i
 
-proc field[T](rng: typedesc[T]): Combinator[set[T]] =
-  let fieldValue = valueRange(T) | singleDigit(T).map(val => {val}) | e('*').map((_) => fullSet(T))
-  fieldValue.sep(e',').map(flattenSet)
+proc fullValue(T: typedesc): Combinator[set[int8]] =
+  value(T).sep(e',').map(flattenSet)
 
-let cronGrammar = field(int8)$minute * sp * field(int8)$hour * sp * field(int8)$dom * sp * field(int8)$month * sp * field(int8)$weekday
+proc stepInterval(T: typedesc): Combinator[set[int8]] =
+  map(fullValue(T) <* e('/') <*> singleDigit) do (inp: tuple[left: set[int8], right: int8]) -> set[int8]:
+    let min = block:
+      var smallest = T.high
+      for i in T.low .. T.high:
+        if i.int8 in inp.left and i < smallest:
+          smallest = i
+      smallest
+
+    for i in countup(min.int8, T.high.int8, inp.right):
+      if i in inp.left:
+        result.incl(i)
+
+proc field(T: typedesc): Combinator[set[int8]] =
+  stepInterval(T) | fullValue(T)
+
+let cronGrammar = field(MinuteRange)$minute * sp * field(HourRange)$hour * sp * field(MonthDayRange)$dom * sp * field(Month)$month * sp * field(Weekday)$weekday
 
 proc parseCron*(input: string): Cron =
   ## Parses a cron string into a structured string
