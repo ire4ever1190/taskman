@@ -9,5 +9,5 @@ srcDir        = "src"
 
 # Dependencies
 
-requires "nim >= 1.6.0"
+requires "nim >= 2.2.4"
 requires "gh:ire4ever1190/nort >= 0.7.0"
