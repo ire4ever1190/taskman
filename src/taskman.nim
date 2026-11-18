@@ -9,7 +9,7 @@ import std/[
   monotimes
 ]
 
-import taskman/cron
+import taskman/[cron, cronParser]
 
 ##
 ## This package can be used for simple tasks that need to run on an interval or at a certain time.
@@ -520,4 +520,4 @@ proc start*[T](scheduler: SchedulerBase[T], periodicCheck = 0) {.multiGenericSyn
   scheduler.running = false
 
 export times
-export cron
+export cron, cronParser
