@@ -24,7 +24,6 @@ let
   }
   sp = e' '
 
-let
   singleDigit = digit().map(val => int8(val))
 
   valueRange = map(singleDigit <* e('-') <*> singleDigit) do (inp: tuple[left, right: int8]) -> set[int8]:
@@ -40,11 +39,12 @@ proc flattenSet[T](inp: seq[set[T]]): set[T] =
   for i in inp:
     result.incl i
 
-proc fullValue(T: typedesc): Combinator[set[int8]] =
+proc values(T: typedesc): Combinator[set[int8]] =
   value(T).sep(e',').map(flattenSet)
 
 proc stepInterval(T: typedesc): Combinator[set[int8]] =
-  map(fullValue(T) <* e('/') <*> singleDigit) do (inp: tuple[left: set[int8], right: int8]) -> set[int8]:
+  ## Parses the `/` operator
+  map(values(T) <* e('/') <*> singleDigit) do (inp: tuple[left: set[int8], right: int8]) -> set[int8]:
     let min = block:
       var smallest = T.high
       for i in T.low .. T.high:
@@ -57,7 +57,7 @@ proc stepInterval(T: typedesc): Combinator[set[int8]] =
         result.incl(i)
 
 proc field(T: typedesc): Combinator[set[int8]] =
-  stepInterval(T) | fullValue(T)
+  stepInterval(T) | values(T)
 
 let cronGrammar = field(MinuteRange)$minute * sp * field(HourRange)$hour * sp * field(MonthDayRange)$dom * sp * field(Month)$month * sp * field(Weekday)$weekday
 
