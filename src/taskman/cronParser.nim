@@ -59,7 +59,26 @@ proc stepInterval(T: typedesc): Combinator[set[int8]] =
 proc field(T: typedesc): Combinator[set[int8]] =
   stepInterval(T) | values(T)
 
-let cronGrammar = field(MinuteRange)$minute * sp * field(HourRange)$hour * sp * field(MonthDayRange)$dom * sp * field(Month)$month * sp * field(Weekday)$weekday
+let
+  # Parse the 5 fields (e.g. * * * * *)
+  fiveFields = map(
+    field(MinuteRange)$minute * sp *
+    field(HourRange)$hour * sp *
+    field(MonthDayRange)$dom * sp *
+    field(Month)$month * sp *
+    field(Weekday)$weekday) do (data: auto) -> Cron:
+      let (minute, hour, dom, month, weekday) = data
+      # Ran into https://github.com/nim-lang/Nim/issues/24714
+      # Everything needed to be the same type inside the combinators, now we convert it
+      # in the worst way possible
+      proc changeSet[T](inp: set[int8], typ: typedesc[T]): set[T] =
+         for i in inp:
+           if i in T.low.ord .. T.high.ord:
+             result.incl(T(i))
+
+      initCron(minute.changeSet(MinuteRange), hour.changeSet(HourRange), dom.changeSet(MonthDayRange), month.changeSet(Month), weekday.changeSet(Weekday))
+
+  cronGrammar = shortcut | fiveFields
 
 proc parseCron*(input: string): Cron =
   ## Parses a cron string into a structured string
@@ -70,13 +89,5 @@ proc parseCron*(input: string): Cron =
   let res = cronGrammar.match(input)
   if res.isNone():
     raise (ref ValueError)(msg: "Failed to parse: " & input)
-  let (minute, hour, dom, month, weekday) = res.get()
-  # Ran into https://github.com/nim-lang/Nim/issues/24714
-  # Everything needed to be the same type inside the combinators, now we convert it
-  # in the worst way possible
-  proc changeSet[T](inp: set[int8], typ: typedesc[T]): set[T] =
-     for i in inp:
-       if i in T.low.ord .. T.high.ord:
-         result.incl(T(i))
 
-  return initCron(minute.changeSet(MinuteRange), hour.changeSet(HourRange), dom.changeSet(MonthDayRange), month.changeSet(Month), weekday.changeSet(Weekday))
+  return res.get()

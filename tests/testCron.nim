@@ -63,6 +63,9 @@ suite "Cron Parser":
   test "1,2,3,4/2 * * * *":
     check cron({1, 2, 3, 4} / 2) == parseCron("1,2,3,4/2 * * * *")
 
+  test "@daily":
+    check parseCron("@daily") == cron(0, 0, x, x, x)
+
 # Tests taken from https://github.com/soasme/nim-schedules/blob/master/tests/test_cron.nim
 
 const dateFormat = "yyyy-MM-dd hh:mm:ss"
